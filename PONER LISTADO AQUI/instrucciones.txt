@@ -1,0 +1,7 @@
+Nombre y apellido del contribuyente (se creara carpeta con este nombre)
+CUIT sin guiones
+clave
+****ES IMPORTANTE DEJAR ESPACIO EN BLANCO ENTRE CADA CONTRIBUYENTE****
+Nombre y apellido del contribuyente (se creara carpeta con este nombre)
+CUIT sin guiones
+clave
