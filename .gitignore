@@ -1,0 +1,60 @@
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Log files
+*.log
+logs/
+
+# Downloaded files and results
+Resultados/
+Downloads/
+
+# Credentials and sensitive data
+clientes.csv
+clientes_importantes.csv
+PONER LISTADO AQUI/
+
+# Chrome driver
+chromedriver*/
+google-chrome-stable*.deb
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Distribution / packaging
+*.spec
+*.exe
+*.manifest
+*.app
+*.dmg 
