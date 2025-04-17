@@ -221,23 +221,36 @@ class NuestraParteExtractor:
                         primer_resultado.click()
                         logger.info("Se hizo clic en el primer resultado")
                         
-                        # Esperar a que se abra una nueva pestaña (si es que se abre)
-                        time.sleep(3)
-                        ventanas_despues = driver.window_handles
+                        # Realizar múltiples intentos para detectar y cambiar a la nueva pestaña
+                        nueva_ventana_encontrada = False
+                        max_intentos = 5
                         
-                        # Verificar si se abrió una nueva pestaña
-                        if len(ventanas_despues) > len(ventanas_antes):
-                            # Cambiar a la nueva pestaña
-                            nueva_ventana = [v for v in ventanas_despues if v not in ventanas_antes][0]
-                            driver.switch_to.window(nueva_ventana)
-                            logger.info(f"Se cambió a la nueva pestaña: {driver.current_url}")
+                        for intento in range(max_intentos):
+                            logger.info(f"Intento {intento+1}/{max_intentos} para detectar nueva pestaña...")
+                            # Esperar a que se abra una nueva pestaña
+                            time.sleep(3)
+                            ventanas_despues = driver.window_handles
                             
-                            # Capturar screenshot en la nueva pestaña
-                            nueva_ventana_screenshot = os.path.join(self.output_folder, f"nueva_ventana_{cuit}.png")
-                            driver.save_screenshot(nueva_ventana_screenshot)
-                            logger.info(f"Se guardó captura de la nueva pestaña en {nueva_ventana_screenshot}")
-                        else:
-                            logger.info("No se abrió una nueva pestaña, continuando en la misma")
+                            # Verificar si se abrió una nueva pestaña
+                            if len(ventanas_despues) > len(ventanas_antes):
+                                # Cambiar a la nueva pestaña
+                                nueva_ventana = [v for v in ventanas_despues if v not in ventanas_antes][0]
+                                driver.switch_to.window(nueva_ventana)
+                                logger.info(f"Se cambió a la nueva pestaña: {driver.current_url}")
+                                
+                                # Capturar screenshot en la nueva pestaña
+                                nueva_ventana_screenshot = os.path.join(self.output_folder, f"nueva_ventana_{cuit}.png")
+                                driver.save_screenshot(nueva_ventana_screenshot)
+                                logger.info(f"Se guardó captura de la nueva pestaña en {nueva_ventana_screenshot}")
+                                
+                                nueva_ventana_encontrada = True
+                                break
+                            else:
+                                logger.info(f"No se detectó nueva pestaña en el intento {intento+1}, esperando...")
+                        
+                        # Si no se abrió una nueva pestaña después de los intentos
+                        if not nueva_ventana_encontrada:
+                            logger.warning("No se abrió una nueva pestaña después de múltiples intentos")
                             # Capturar screenshot de la página actual
                             misma_pagina_screenshot = os.path.join(self.output_folder, f"misma_pagina_{cuit}.png")
                             driver.save_screenshot(misma_pagina_screenshot)
@@ -246,9 +259,44 @@ class NuestraParteExtractor:
                         # Esperar a que cargue la página
                         time.sleep(5)
                         
-                        # Solo reportar que la navegación fue exitosa
-                        logger.info(f"Navegación exitosa a través del buscador. URL actual: {driver.current_url}")
-                        return True
+                        # Verificar si estamos en la página correcta de Nuestra Parte
+                        # Verificamos por fragmentos de URL que podrían indicar que estamos en la página correcta
+                        url_actual = driver.current_url
+                        urls_validas = ["serviciosjava2.afip.gob.ar/cgpf", "nuestra-parte", "nuestraparte"]
+                        
+                        if any(fragmento in url_actual.lower() for fragmento in urls_validas):
+                            logger.info(f"Navegación exitosa a través del buscador. URL actual: {url_actual}")
+                            return True
+                        else:
+                            logger.error(f"No se pudo navegar a la página de Nuestra Parte. URL actual: {url_actual}")
+                            error_navegacion_screenshot = os.path.join(self.output_folder, f"error_navegacion_{cuit}.png")
+                            driver.save_screenshot(error_navegacion_screenshot)
+                            logger.info(f"Se guardó captura del error de navegación en {error_navegacion_screenshot}")
+                            
+                            # Intentar alternativa: navegación directa a URL conocida
+                            logger.info("Intentando navegación alternativa directa a URL de Nuestra Parte...")
+                            try:
+                                driver.get("https://serviciosjava2.afip.gob.ar/cgpf/jsp/mostrarMenu.do")
+                                time.sleep(5)
+                                
+                                url_despues_redireccion = driver.current_url
+                                logger.info(f"URL después de navegación directa: {url_despues_redireccion}")
+                                
+                                # Capturar screenshot después de navegación directa
+                                nav_directa_screenshot = os.path.join(self.output_folder, f"navegacion_directa_{cuit}.png")
+                                driver.save_screenshot(nav_directa_screenshot)
+                                logger.info(f"Se guardó captura después de navegación directa en {nav_directa_screenshot}")
+                                
+                                # Verificar si la URL contiene alguno de los fragmentos válidos
+                                if any(fragmento in url_despues_redireccion.lower() for fragmento in urls_validas):
+                                    logger.info("Navegación directa exitosa a Nuestra Parte")
+                                    return True
+                                else:
+                                    logger.error("La navegación directa también falló")
+                                    return False
+                            except Exception as e:
+                                logger.error(f"Error durante la navegación directa: {e}")
+                                return False
                     except Exception as e:
                         logger.error(f"Error al buscar 'Nuestra Parte': {e}")
                         
@@ -302,26 +350,110 @@ class NuestraParteExtractor:
             driver.save_screenshot(menu_screenshot)
             logger.info(f"Se guardó captura de la página de Nuestra Parte en {menu_screenshot}")
             
+            # Verificar que estamos en la página correcta de Nuestra Parte
+            url_actual = driver.current_url
+            urls_validas = ["serviciosjava2.afip.gob.ar/cgpf", "nuestra-parte", "nuestraparte"]
+            
+            if not any(fragmento in url_actual.lower() for fragmento in urls_validas):
+                logger.warning(f"No estamos en la página de Nuestra Parte. URL actual: {url_actual}")
+                logger.warning("Intentando continuar de todas formas...")
+                
+                # Dar un tiempo extra de espera por si la página aún está cargando
+                time.sleep(5)
+                driver.save_screenshot(os.path.join(nuestra_parte_dir, "pagina_desconocida.png"))
+            
             # Buscar y hacer clic en el año especificado
             logger.info(f"Buscando el año {año} en la sección 'Información nacional anual'")
             
             try:
-                # Verificar que estamos en la pestaña "Información nacional anual"
-                tab_nacional = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#tabNacional']"))
-                )
+                # Intentar con diferentes aproximaciones para encontrar la pestaña
+                max_intentos = 3
+                tab_encontrado = False
                 
-                # Si la pestaña no tiene la clase 'active', hacemos clic
-                if "active" not in tab_nacional.get_attribute("class"):
-                    logger.info("Haciendo clic en la pestaña 'Información nacional anual'")
-                    tab_nacional.click()
-                    time.sleep(2)
+                for intento in range(max_intentos):
+                    logger.info(f"Intento {intento+1}/{max_intentos} para encontrar la pestaña 'Información nacional anual'")
                     
-                # Buscar el botón del año usando el selector directo
-                selector = f"span.btn-consultar[data-periodo='{año}']"
+                    try:
+                        # Diferentes selectores para intentar encontrar la pestaña
+                        selectores = [
+                            "a[href='#tabNacional']",
+                            "a.nav-link[data-toggle='tab']",
+                            "ul.nav-tabs a",
+                            "a:contains('Nacional')",
+                            "#myTab a"
+                        ]
+                        
+                        for selector in selectores:
+                            try:
+                                # Usar un tiempo de espera más corto para cada intento de selector
+                                tab_nacional = WebDriverWait(driver, 5).until(
+                                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                                )
+                                logger.info(f"Pestaña encontrada con selector: {selector}")
+                                
+                                # Si la pestaña no tiene la clase 'active', hacemos clic
+                                if "active" not in tab_nacional.get_attribute("class"):
+                                    logger.info("Haciendo clic en la pestaña 'Información nacional anual'")
+                                    tab_nacional.click()
+                                    time.sleep(2)
+                                
+                                tab_encontrado = True
+                                break
+                            except Exception as e:
+                                logger.info(f"No se encontró la pestaña con selector: {selector}")
+                                continue
+                        
+                        if tab_encontrado:
+                            break
+                        else:
+                            logger.warning(f"No se encontró la pestaña en el intento {intento+1}, esperando...")
+                            time.sleep(3)
+                    except Exception as e:
+                        logger.warning(f"Error en el intento {intento+1}: {e}")
+                        time.sleep(3)
                 
-                # Buscar todos los botones de años visibles
-                visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
+                # Si no se encontró la pestaña, capturar el estado y avisar
+                if not tab_encontrado:
+                    logger.warning("No se pudo encontrar la pestaña 'Información nacional anual' después de varios intentos")
+                    driver.save_screenshot(os.path.join(nuestra_parte_dir, "error_pestana.png"))
+                
+                # Buscar los botones de años, incluso si no se encontró la pestaña específica
+                logger.info("Buscando botones de años disponibles...")
+                
+                # Esperar un tiempo para que se carguen los elementos
+                time.sleep(3)
+                
+                # Intentar encontrar los años con diferentes selectores
+                selectores_años = [
+                    "span.btn-consultar.c-2x",
+                    "span.btn-consultar",
+                    "div.btn-group span",
+                    ".periodo-selector span"
+                ]
+                
+                visible_years_elements = []
+                for selector in selectores_años:
+                    try:
+                        elementos = driver.find_elements(By.CSS_SELECTOR, selector)
+                        elementos_visibles = [e for e in elementos if e.is_displayed()]
+                        if elementos_visibles:
+                            visible_years_elements = elementos_visibles
+                            logger.info(f"Se encontraron {len(elementos_visibles)} botones de años con selector: {selector}")
+                            break
+                    except Exception as e:
+                        logger.info(f"Error al buscar años con selector {selector}: {e}")
+                
+                if not visible_years_elements:
+                    logger.error("No se encontraron botones de años visibles")
+                    driver.save_screenshot(os.path.join(nuestra_parte_dir, "no_hay_años.png"))
+                    
+                    # Capturar todo el HTML de la página para análisis posterior
+                    with open(os.path.join(nuestra_parte_dir, "pagina_html.txt"), "w", encoding="utf-8") as f:
+                        f.write(driver.page_source)
+                    logger.info("Se guardó el HTML de la página para análisis posterior")
+                    
+                    return False
+                
                 visible_years = [elem.text.strip() for elem in visible_years_elements]
                 logger.info(f"Años visibles actualmente: {visible_years}")
                 
@@ -339,61 +471,77 @@ class NuestraParteExtractor:
                     # Navegar usando las flechas para encontrar el año
                     if visible_years and int(año) < int(min(visible_years)):
                         # Navegar a la izquierda para años anteriores
-                        left_arrow = driver.find_element(By.CSS_SELECTOR, "a.left-button")
-                        
-                        # Seguir haciendo clic hasta encontrar el año o alcanzar el límite
-                        for _ in range(10):
-                            if "flecha-disabled" in left_arrow.get_attribute("class"):
-                                break
-                                
-                            left_arrow.click()
-                            time.sleep(1)
+                        try:
+                            left_arrow = driver.find_element(By.CSS_SELECTOR, "a.left-button")
                             
-                            # Verificar si el año ya es visible
-                            visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
-                            visible_years = [elem.text.strip() for elem in visible_years_elements]
-                            
-                            if año in visible_years:
-                                for btn in visible_years_elements:
-                                    if btn.text.strip() == año:
-                                        year_button = btn
-                                        year_found = True
-                                        break
-                                if year_found:
+                            # Seguir haciendo clic hasta encontrar el año o alcanzar el límite
+                            for _ in range(10):
+                                if "flecha-disabled" in left_arrow.get_attribute("class"):
                                     break
+                                    
+                                left_arrow.click()
+                                time.sleep(1)
+                                
+                                # Verificar si el año ya es visible
+                                visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
+                                visible_years = [elem.text.strip() for elem in visible_years_elements]
+                                
+                                if año in visible_years:
+                                    for btn in visible_years_elements:
+                                        if btn.text.strip() == año:
+                                            year_button = btn
+                                            year_found = True
+                                            break
+                                    if year_found:
+                                        break
+                        except Exception as e:
+                            logger.error(f"Error al navegar a la izquierda para buscar el año: {e}")
                     
                     elif visible_years and int(año) > int(max(visible_years)):
                         # Navegar a la derecha para años más recientes
-                        right_arrow = driver.find_element(By.CSS_SELECTOR, "a.right-button")
-                        
-                        # Seguir haciendo clic hasta encontrar el año o alcanzar el límite
-                        for _ in range(10):
-                            if "flecha-disabled" in right_arrow.get_attribute("class"):
-                                break
-                                
-                            right_arrow.click()
-                            time.sleep(1)
+                        try:
+                            right_arrow = driver.find_element(By.CSS_SELECTOR, "a.right-button")
                             
-                            # Verificar si el año ya es visible
-                            visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
-                            visible_years = [elem.text.strip() for elem in visible_years_elements]
-                            
-                            if año in visible_years:
-                                for btn in visible_years_elements:
-                                    if btn.text.strip() == año:
-                                        year_button = btn
-                                        year_found = True
-                                        break
-                                if year_found:
+                            # Seguir haciendo clic hasta encontrar el año o alcanzar el límite
+                            for _ in range(10):
+                                if "flecha-disabled" in right_arrow.get_attribute("class"):
                                     break
+                                    
+                                right_arrow.click()
+                                time.sleep(1)
+                                
+                                # Verificar si el año ya es visible
+                                visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
+                                visible_years = [elem.text.strip() for elem in visible_years_elements]
+                                
+                                if año in visible_years:
+                                    for btn in visible_years_elements:
+                                        if btn.text.strip() == año:
+                                            year_button = btn
+                                            year_found = True
+                                            break
+                                    if year_found:
+                                        break
+                        except Exception as e:
+                            logger.error(f"Error al navegar a la derecha para buscar el año: {e}")
                 
                 # Si encontramos el año, hacer clic
                 if year_found:
                     logger.info(f"Año {año} encontrado, haciendo clic...")
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", year_button)
-                    time.sleep(1)
-                    driver.execute_script("arguments[0].click();", year_button)
-                    logger.info(f"Se hizo clic en el año {año}")
+                    try:
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", year_button)
+                        time.sleep(1)
+                        driver.execute_script("arguments[0].click();", year_button)
+                        logger.info(f"Se hizo clic en el año {año}")
+                    except Exception as e:
+                        logger.error(f"Error al hacer clic en el año {año}: {e}")
+                        # Intentar con click normal si el script falla
+                        try:
+                            year_button.click()
+                            logger.info(f"Se hizo clic en el año {año} con método alternativo")
+                        except Exception as e2:
+                            logger.error(f"No se pudo hacer clic en el año {año}: {e2}")
+                            return False
                 else:
                     # Si no encontramos el año, intentar usar el más reciente disponible
                     logger.warning(f"No se pudo encontrar el año {año}, intentando usar el más reciente disponible")
@@ -401,13 +549,17 @@ class NuestraParteExtractor:
                     visible_years = [elem.text.strip() for elem in visible_years_elements]
                     
                     if visible_years:
-                        most_recent_year = max(visible_years)
-                        for btn in visible_years_elements:
-                            if btn.text.strip() == most_recent_year:
-                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                                time.sleep(1)
-                                driver.execute_script("arguments[0].click();", btn)
-                                logger.info(f"Se hizo clic en el año alternativo {most_recent_year}")
+                        try:
+                            most_recent_year = max(visible_years)
+                            for btn in visible_years_elements:
+                                if btn.text.strip() == most_recent_year:
+                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                                    time.sleep(1)
+                                    driver.execute_script("arguments[0].click();", btn)
+                                    logger.info(f"Se hizo clic en el año alternativo {most_recent_year}")
+                        except Exception as e:
+                            logger.error(f"Error al hacer clic en el año alternativo: {e}")
+                            return False
                     else:
                         logger.error("No se encontraron años visibles para hacer clic")
                         return False
