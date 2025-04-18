@@ -333,257 +333,587 @@ class NuestraParteExtractor:
                 pass
             return False
     
-    def procesar_nuestra_parte(self, driver, año, path_contribuyente):
+    def procesar_nuestra_parte(self, driver, cuit, año, output_dir):
         """
-        Procesa la sección de Nuestra Parte
+        Procesa la sección "Nuestra Parte" para el CUIT y año especificados.
+        
+        Args:
+            driver: WebDriver de Selenium
+            cuit: CUIT a procesar
+            año: Año a procesar
+            output_dir: Directorio donde guardar los resultados
+        
+        Returns:
+            bool: True si el proceso fue exitoso, False en caso contrario
         """
         try:
-            logger.info("Procesando sección de Nuestra Parte")
+            # Crear directorio de salida para este cuit si no existe
+            contribuyente_dir = os.path.join(output_dir, cuit)
+            os.makedirs(contribuyente_dir, exist_ok=True)
             
-            # Crear carpeta para Nuestra Parte con timestamp para evitar sobreescrituras
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            nuestra_parte_dir = os.path.join(path_contribuyente, f"Nuestra_Parte_{año}_{timestamp}")
-            os.makedirs(nuestra_parte_dir, exist_ok=True)
+            # Verificar que estamos en la página correcta
+            current_url = driver.current_url
+            valid_fragments = ["serviciosjava2.afip.gob.ar/cgpf", "nuestra-parte", "nuestraparte"]
+            if not any(fragment in current_url.lower() for fragment in valid_fragments):
+                logger.warning(f"URL actual '{current_url}' no corresponde a 'Nuestra Parte'")
+                driver.save_screenshot(os.path.join(contribuyente_dir, "pagina_desconocida.png"))
             
-            # Capturar screenshot de la página inicial de Nuestra Parte
-            menu_screenshot = os.path.join(nuestra_parte_dir, "menu_principal.png")
-            driver.save_screenshot(menu_screenshot)
-            logger.info(f"Se guardó captura de la página de Nuestra Parte en {menu_screenshot}")
+            # Capturar pantalla de la página de nuestra parte
+            driver.save_screenshot(os.path.join(contribuyente_dir, "nuestra_parte.png"))
             
-            # Verificar que estamos en la página correcta de Nuestra Parte
-            url_actual = driver.current_url
-            urls_validas = ["serviciosjava2.afip.gob.ar/cgpf", "nuestra-parte", "nuestraparte"]
+            # Buscar los botones de año directamente sin buscar primero la pestaña
+            # Ya que la pestaña podría estar ya seleccionada por defecto
+            año_encontrado = False
             
-            if not any(fragmento in url_actual.lower() for fragmento in urls_validas):
-                logger.warning(f"No estamos en la página de Nuestra Parte. URL actual: {url_actual}")
-                logger.warning("Intentando continuar de todas formas...")
-                
-                # Dar un tiempo extra de espera por si la página aún está cargando
-                time.sleep(5)
-                driver.save_screenshot(os.path.join(nuestra_parte_dir, "pagina_desconocida.png"))
+            # Capturar el estado actual para referencia
+            driver.save_screenshot(os.path.join(contribuyente_dir, "antes_seleccion_año.png"))
             
-            # Buscar y hacer clic en el año especificado
-            logger.info(f"Buscando el año {año} en la sección 'Información nacional anual'")
-            
+            # Nueva estrategia: Buscar botones con la clase y el atributo data-periodo
             try:
-                # Intentar con diferentes aproximaciones para encontrar la pestaña
-                max_intentos = 3
-                tab_encontrado = False
+                # Encontrar todos los botones de año con el nuevo selector
+                year_buttons = driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar[data-periodo]")
                 
-                for intento in range(max_intentos):
-                    logger.info(f"Intento {intento+1}/{max_intentos} para encontrar la pestaña 'Información nacional anual'")
+                if year_buttons:
+                    logger.info(f"Se encontraron {len(year_buttons)} botones de año con el nuevo selector")
                     
-                    try:
-                        # Diferentes selectores para intentar encontrar la pestaña
-                        selectores = [
-                            "a[href='#tabNacional']",
-                            "a.nav-link[data-toggle='tab']",
-                            "ul.nav-tabs a",
-                            "a:contains('Nacional')",
-                            "#myTab a"
-                        ]
-                        
-                        for selector in selectores:
-                            try:
-                                # Usar un tiempo de espera más corto para cada intento de selector
-                                tab_nacional = WebDriverWait(driver, 5).until(
-                                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                                )
-                                logger.info(f"Pestaña encontrada con selector: {selector}")
-                                
-                                # Si la pestaña no tiene la clase 'active', hacemos clic
-                                if "active" not in tab_nacional.get_attribute("class"):
-                                    logger.info("Haciendo clic en la pestaña 'Información nacional anual'")
-                                    tab_nacional.click()
-                                    time.sleep(2)
-                                
-                                tab_encontrado = True
-                                break
-                            except Exception as e:
-                                logger.info(f"No se encontró la pestaña con selector: {selector}")
-                                continue
-                        
-                        if tab_encontrado:
-                            break
-                        else:
-                            logger.warning(f"No se encontró la pestaña en el intento {intento+1}, esperando...")
-                            time.sleep(3)
-                    except Exception as e:
-                        logger.warning(f"Error en el intento {intento+1}: {e}")
-                        time.sleep(3)
-                
-                # Si no se encontró la pestaña, capturar el estado y avisar
-                if not tab_encontrado:
-                    logger.warning("No se pudo encontrar la pestaña 'Información nacional anual' después de varios intentos")
-                    driver.save_screenshot(os.path.join(nuestra_parte_dir, "error_pestana.png"))
-                
-                # Buscar los botones de años, incluso si no se encontró la pestaña específica
-                logger.info("Buscando botones de años disponibles...")
-                
-                # Esperar un tiempo para que se carguen los elementos
-                time.sleep(3)
-                
-                # Intentar encontrar los años con diferentes selectores
-                selectores_años = [
-                    "span.btn-consultar.c-2x",
-                    "span.btn-consultar",
-                    "div.btn-group span",
-                    ".periodo-selector span"
-                ]
-                
-                visible_years_elements = []
-                for selector in selectores_años:
-                    try:
-                        elementos = driver.find_elements(By.CSS_SELECTOR, selector)
-                        elementos_visibles = [e for e in elementos if e.is_displayed()]
-                        if elementos_visibles:
-                            visible_years_elements = elementos_visibles
-                            logger.info(f"Se encontraron {len(elementos_visibles)} botones de años con selector: {selector}")
-                            break
-                    except Exception as e:
-                        logger.info(f"Error al buscar años con selector {selector}: {e}")
-                
-                if not visible_years_elements:
-                    logger.error("No se encontraron botones de años visibles")
-                    driver.save_screenshot(os.path.join(nuestra_parte_dir, "no_hay_años.png"))
+                    # Guardar una lista de años disponibles para depuración
+                    años_disponibles = [btn.text.strip() for btn in year_buttons]
+                    logger.info(f"Años disponibles: {años_disponibles}")
                     
-                    # Capturar todo el HTML de la página para análisis posterior
-                    with open(os.path.join(nuestra_parte_dir, "pagina_html.txt"), "w", encoding="utf-8") as f:
-                        f.write(driver.page_source)
-                    logger.info("Se guardó el HTML de la página para análisis posterior")
-                    
-                    return False
-                
-                visible_years = [elem.text.strip() for elem in visible_years_elements]
-                logger.info(f"Años visibles actualmente: {visible_years}")
-                
-                # El año está visible directamente?
-                year_found = False
-                
-                if año in visible_years:
-                    year_found = True
-                    # Encontrar el botón para hacer clic
-                    for btn in visible_years_elements:
-                        if btn.text.strip() == año:
-                            year_button = btn
-                            break
-                else:
-                    # Navegar usando las flechas para encontrar el año
-                    if visible_years and int(año) < int(min(visible_years)):
-                        # Navegar a la izquierda para años anteriores
-                        try:
-                            left_arrow = driver.find_element(By.CSS_SELECTOR, "a.left-button")
+                    # Buscar el botón correspondiente al año requerido
+                    for button in year_buttons:
+                        periodo = button.get_attribute("data-periodo")
+                        if periodo == str(año):
+                            logger.info(f"Botón del año {año} encontrado, haciendo clic...")
+                            driver.save_screenshot(os.path.join(contribuyente_dir, f"antes_clic_año_{año}.png"))
                             
-                            # Seguir haciendo clic hasta encontrar el año o alcanzar el límite
-                            for _ in range(10):
-                                if "flecha-disabled" in left_arrow.get_attribute("class"):
-                                    break
-                                    
-                                left_arrow.click()
-                                time.sleep(1)
-                                
-                                # Verificar si el año ya es visible
-                                visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
-                                visible_years = [elem.text.strip() for elem in visible_years_elements]
-                                
-                                if año in visible_years:
-                                    for btn in visible_years_elements:
-                                        if btn.text.strip() == año:
-                                            year_button = btn
-                                            year_found = True
-                                            break
-                                    if year_found:
-                                        break
-                        except Exception as e:
-                            logger.error(f"Error al navegar a la izquierda para buscar el año: {e}")
-                    
-                    elif visible_years and int(año) > int(max(visible_years)):
-                        # Navegar a la derecha para años más recientes
-                        try:
-                            right_arrow = driver.find_element(By.CSS_SELECTOR, "a.right-button")
+                            # Hacer scroll al botón y luego hacer clic
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+                            time.sleep(1)
+                            driver.execute_script("arguments[0].click();", button)
+                            logger.info(f"Se hizo clic en el botón del año {año}")
+                            time.sleep(5)  # Esperar a que cargue la información del año
                             
-                            # Seguir haciendo clic hasta encontrar el año o alcanzar el límite
-                            for _ in range(10):
-                                if "flecha-disabled" in right_arrow.get_attribute("class"):
-                                    break
-                                    
-                                right_arrow.click()
-                                time.sleep(1)
-                                
-                                # Verificar si el año ya es visible
-                                visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
-                                visible_years = [elem.text.strip() for elem in visible_years_elements]
-                                
-                                if año in visible_years:
-                                    for btn in visible_years_elements:
-                                        if btn.text.strip() == año:
-                                            year_button = btn
-                                            year_found = True
-                                            break
-                                    if year_found:
-                                        break
-                        except Exception as e:
-                            logger.error(f"Error al navegar a la derecha para buscar el año: {e}")
-                
-                # Si encontramos el año, hacer clic
-                if year_found:
-                    logger.info(f"Año {año} encontrado, haciendo clic...")
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", year_button)
-                        time.sleep(1)
-                        driver.execute_script("arguments[0].click();", year_button)
-                        logger.info(f"Se hizo clic en el año {año}")
-                    except Exception as e:
-                        logger.error(f"Error al hacer clic en el año {año}: {e}")
-                        # Intentar con click normal si el script falla
-                        try:
-                            year_button.click()
-                            logger.info(f"Se hizo clic en el año {año} con método alternativo")
-                        except Exception as e2:
-                            logger.error(f"No se pudo hacer clic en el año {año}: {e2}")
-                            return False
-                else:
-                    # Si no encontramos el año, intentar usar el más reciente disponible
-                    logger.warning(f"No se pudo encontrar el año {año}, intentando usar el más reciente disponible")
-                    visible_years_elements = [e for e in driver.find_elements(By.CSS_SELECTOR, "span.btn-consultar.c-2x") if e.is_displayed()]
-                    visible_years = [elem.text.strip() for elem in visible_years_elements]
+                            año_encontrado = True
+                            break
                     
-                    if visible_years:
-                        try:
-                            most_recent_year = max(visible_years)
-                            for btn in visible_years_elements:
-                                if btn.text.strip() == most_recent_year:
-                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                                    time.sleep(1)
-                                    driver.execute_script("arguments[0].click();", btn)
-                                    logger.info(f"Se hizo clic en el año alternativo {most_recent_year}")
-                        except Exception as e:
-                            logger.error(f"Error al hacer clic en el año alternativo: {e}")
-                            return False
-                    else:
-                        logger.error("No se encontraron años visibles para hacer clic")
-                        return False
-                
-                # Esperar a que se procese el formulario después de hacer clic
-                time.sleep(5)
-                
-                # Capturar screenshot después de hacer clic
-                after_click_screenshot = os.path.join(nuestra_parte_dir, f"después_clic_año.png")
-                driver.save_screenshot(after_click_screenshot)
-                logger.info(f"Se guardó captura después de hacer clic en {after_click_screenshot}")
-                
-                return True
-                
+                    # Si no se encuentra el año exacto, buscar el más reciente disponible
+                    if not año_encontrado:
+                        logger.warning(f"No se encontró el año {año}, buscando el año más reciente disponible")
+                        # Ordenar los botones por año (de más reciente a más antiguo)
+                        year_buttons_sorted = sorted(year_buttons, key=lambda btn: btn.get_attribute("data-periodo"), reverse=True)
+                        
+                        if year_buttons_sorted:
+                            recent_year = year_buttons_sorted[0]
+                            año_reciente = recent_year.get_attribute("data-periodo")
+                            logger.info(f"Usando el año más reciente disponible: {año_reciente}")
+                            
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", recent_year)
+                            time.sleep(1)
+                            driver.execute_script("arguments[0].click();", recent_year)
+                            logger.info(f"Se hizo clic en el año más reciente: {año_reciente}")
+                            time.sleep(5)  # Esperar a que cargue la información del año
+                            
+                            # Actualizar el año para la carpeta de salida
+                            año = año_reciente
+                            año_encontrado = True
+                else:
+                    logger.warning("No se encontraron botones de año con el nuevo selector")
             except Exception as e:
-                logger.error(f"Error al buscar/hacer clic en el año {año}: {e}")
-                error_screenshot = os.path.join(nuestra_parte_dir, f"error_año_{año}.png")
-                driver.save_screenshot(error_screenshot)
-                logger.info(f"Se guardó captura del error en {error_screenshot}")
-                return False
+                logger.error(f"Error al buscar botones de año: {e}")
+                driver.save_screenshot(os.path.join(contribuyente_dir, "error_busqueda_botones.png"))
+            
+            # Si fallamos con el nuevo método, intentar con el método anterior como fallback
+            if not año_encontrado:
+                logger.warning("Intentando método alternativo para encontrar botones de año")
+                try:
+                    # Intentar encontrar la pestaña "Información nacional anual" primero
+                    tab_selectors = [
+                        "a[role='tab']:contains('Información nacional anual')",
+                        "a[href='#tabNacional']",
+                        "ul.nav-tabs li.active a",
+                        "a[role='tab']"
+                    ]
+                    
+                    for selector in tab_selectors:
+                        try:
+                            tab = driver.find_element(By.CSS_SELECTOR, selector)
+                            driver.execute_script("arguments[0].click();", tab)
+                            logger.info(f"Se hizo clic en pestaña usando selector: {selector}")
+                            time.sleep(2)
+                            break
+                        except:
+                            logger.warning(f"No se encontró pestaña con selector: {selector}")
+                            continue
+                    
+                    # Buscar botones de año con los selectores originales
+                    buttons = driver.find_elements(By.CSS_SELECTOR, "button.year-button")
+                    visible_buttons = [button for button in buttons if button.is_displayed()]
+                    
+                    if visible_buttons:
+                        # Proceso original para seleccionar el año
+                        for button in visible_buttons:
+                            if button.text.strip() == str(año):
+                                driver.execute_script("arguments[0].click();", button)
+                                time.sleep(2)
+                                año_encontrado = True
+                                break
+                except Exception as e:
+                    logger.error(f"Error en método alternativo: {e}")
+            
+            # Si aún no hemos encontrado el año, capturar toda la página y continuar
+            if not año_encontrado:
+                logger.warning(f"No se pudo encontrar/seleccionar el año {año}, continuando con lo que esté disponible")
+                driver.save_screenshot(os.path.join(contribuyente_dir, "pagina_sin_año_seleccionado.png"))
                 
+                # Guardar HTML completo para análisis posterior
+                with open(os.path.join(contribuyente_dir, "pagina_completa.html"), "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+            
+            # Crear directorio para este año
+            año_dir = os.path.join(contribuyente_dir, f"año_{año}")
+            os.makedirs(año_dir, exist_ok=True)
+            
+            # Capturar pantalla con la información disponible
+            driver.save_screenshot(os.path.join(año_dir, f"info_disponible_{año}.png"))
+            
+            # Procesar secciones de datos (intentar extraer lo que se pueda)
+            self.procesar_secciones_datos(driver, año_dir)
+            
+            return True
+            
         except Exception as e:
-            logger.error(f"Error general en procesar_nuestra_parte: {e}")
+            logger.error(f"Error al procesar 'Nuestra Parte': {e}")
+            # Capturar pantalla en caso de error
+            try:
+                error_dir = os.path.join(output_dir, cuit)
+                os.makedirs(error_dir, exist_ok=True)
+                driver.save_screenshot(os.path.join(error_dir, "error_nuestra_parte.png"))
+            except:
+                pass
             return False
+    
+    def procesar_secciones_datos(self, driver, output_dir):
+        """
+        Procesa todas las secciones de datos disponibles en la página de Nuestra Parte.
+        Para cada sección, crea una carpeta y captura los PDFs haciendo clic en los íconos de impresión.
+        
+        Args:
+            driver: WebDriver de Selenium
+            output_dir: Directorio donde guardar los resultados
+        """
+        try:
+            # Esperar a que la página cargue completamente
+            time.sleep(5)
+            
+            # Primero, procesar las secciones principales (div-container-grey con span dentro)
+            self.procesar_secciones_principales(driver, output_dir)
+            
+            # Luego, procesar los spans de títulos individuales que aparecen fuera de secciones principales
+            self.procesar_spans_individuales(driver, output_dir)
+            
+            logger.info("Procesamiento de secciones completado")
+            
+        except Exception as e:
+            logger.error(f"Error general al procesar secciones: {e}")
+    
+    def procesar_secciones_principales(self, driver, output_dir):
+        """
+        Procesa las secciones principales que están dentro de div-container-grey
+        """
+        try:
+            # Encontrar todas las secciones (div-container-grey)
+            secciones_containers = driver.find_elements(By.CSS_SELECTOR, "div.div-container-grey")
+            
+            if not secciones_containers:
+                logger.warning("No se encontraron secciones principales en la página")
+                driver.save_screenshot(os.path.join(output_dir, "no_secciones_principales.png"))
+                return
+                
+            logger.info(f"Se encontraron {len(secciones_containers)} secciones principales")
+            
+            # Para cada sección principal
+            for idx, seccion_container in enumerate(secciones_containers, 1):
+                try:
+                    # Obtener el título de la sección
+                    span_titulo = seccion_container.find_element(By.CSS_SELECTOR, "span")
+                    titulo_seccion = span_titulo.text.strip()
+                    logger.info(f"Procesando sección principal: {titulo_seccion}")
+                    
+                    # Crear carpeta para esta sección
+                    seccion_dir = os.path.join(output_dir, f"{idx}_{self.normalizar_nombre(titulo_seccion)}")
+                    os.makedirs(seccion_dir, exist_ok=True)
+                    
+                    # Capturar screenshot de la sección
+                    driver.save_screenshot(os.path.join(seccion_dir, "seccion.png"))
+                    
+                    # También guardar el HTML de la sección completa
+                    seccion_html = seccion_container.get_attribute("outerHTML")
+                    with open(os.path.join(seccion_dir, "seccion.html"), 'w', encoding='utf-8') as f:
+                        f.write(seccion_html)
+                    
+                    # Buscar todos los íconos (elementos clickeables) dentro de esta sección
+                    try:
+                        icons = seccion_container.find_elements(By.CSS_SELECTOR, ".circleIcon i.btn-consultar")
+                        logger.info(f"Se encontraron {len(icons)} íconos en la sección principal {titulo_seccion}")
+                        
+                        # Para cada ícono, hacer clic y procesar su contenido
+                        for icon_idx, icon in enumerate(icons, 1):
+                            try:
+                                # Obtener el nombre del elemento a partir del párrafo adyacente
+                                try:
+                                    nombre_elemento = icon.find_element(By.XPATH, "./following-sibling::p").text.strip()
+                                except:
+                                    try:
+                                        # Si no funciona, intentar obtenerlo del elemento padre
+                                        nombre_elemento = icon.find_element(By.XPATH, "../p").text.strip()
+                                    except:
+                                        nombre_elemento = f"elemento_{icon_idx}"
+                                
+                                logger.info(f"Procesando elemento: {nombre_elemento}")
+                                
+                                # Crear carpeta para este elemento
+                                elemento_dir = os.path.join(seccion_dir, f"{icon_idx}_{self.normalizar_nombre(nombre_elemento)}")
+                                os.makedirs(elemento_dir, exist_ok=True)
+                                
+                                # Hacer clic en el ícono
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", icon)
+                                time.sleep(1)
+                                
+                                # Capturar antes de hacer clic
+                                driver.save_screenshot(os.path.join(elemento_dir, "antes_clic.png"))
+                                
+                                # Hacer clic
+                                driver.execute_script("arguments[0].click();", icon)
+                                logger.info(f"Se hizo clic en el ícono de {nombre_elemento}")
+                                
+                                # Esperar a que se carguen los datos
+                                time.sleep(5)
+                                
+                                # Capturar después de hacer clic
+                                driver.save_screenshot(os.path.join(elemento_dir, "despues_clic.png"))
+                                
+                                # Buscar íconos de impresión para guardar PDFs
+                                try:
+                                    # Buscar todos los íconos de impresión que estén visibles
+                                    print_icons = driver.find_elements(By.CSS_SELECTOR, "a.btn-imprimir")
+                                    visible_print_icons = [icon for icon in print_icons if icon.is_displayed()]
+                                    
+                                    logger.info(f"Se encontraron {len(visible_print_icons)} íconos de impresión en {nombre_elemento}")
+                                    
+                                    for print_idx, print_icon in enumerate(visible_print_icons, 1):
+                                        try:
+                                            # Obtener el título de la tabla/sección
+                                            try:
+                                                # Encontrar el encabezado h3 más cercano
+                                                h3_element = print_icon.find_element(By.XPATH, "../h3")
+                                                titulo_tabla = h3_element.text.strip()
+                                            except:
+                                                titulo_tabla = f"tabla_{print_idx}"
+                                            
+                                            logger.info(f"Procesando tabla: {titulo_tabla}")
+                                            
+                                            # En lugar de hacer clic en el botón de impresión (que abre un diálogo),
+                                            # vamos a guardar directamente el contenido HTML de la tabla correspondiente
+                                            
+                                            # Determinar qué elemento capturar basado en el atributo data-class del ícono de impresión
+                                            data_class = print_icon.get_attribute("data-class")
+                                            
+                                            # Encontrar la tabla correspondiente
+                                            tabla_selector = None
+                                            if data_class:
+                                                try:
+                                                    # Buscar el elemento con la clase especificada
+                                                    contenedor = driver.find_element(By.CSS_SELECTOR, f".{data_class}")
+                                                    
+                                                    # Buscar tablas dentro del contenedor
+                                                    tablas = contenedor.find_elements(By.CSS_SELECTOR, "table")
+                                                    
+                                                    if tablas:
+                                                        for tabla in tablas:
+                                                            # Guardar el HTML de cada tabla
+                                                            tabla_html = tabla.get_attribute("outerHTML")
+                                                            tabla_id = tabla.get_attribute("id") or f"tabla_{print_idx}"
+                                                            
+                                                            # Crear un archivo HTML con el contenido de la tabla
+                                                            html_filename = os.path.join(elemento_dir, f"{print_idx}_{self.normalizar_nombre(tabla_id)}.html")
+                                                            
+                                                            # Crear un HTML básico con la tabla
+                                                            html_content = f"""
+                                                            <!DOCTYPE html>
+                                                            <html>
+                                                            <head>
+                                                                <meta charset="UTF-8">
+                                                                <title>{titulo_tabla}</title>
+                                                                <style>
+                                                                    table {{ border-collapse: collapse; width: 100%; }}
+                                                                    th, td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+                                                                    th {{ background-color: #f2f2f2; }}
+                                                                </style>
+                                                            </head>
+                                                            <body>
+                                                                <h1>{titulo_tabla}</h1>
+                                                                {tabla_html}
+                                                            </body>
+                                                            </html>
+                                                            """
+                                                            
+                                                            with open(html_filename, 'w', encoding='utf-8') as f:
+                                                                f.write(html_content)
+                                                            
+                                                            logger.info(f"Se guardó el HTML de la tabla {tabla_id} en {html_filename}")
+                                                    else:
+                                                        # Intentar capturar todo el contenedor si no hay tablas específicas
+                                                        contenedor_html = contenedor.get_attribute("outerHTML")
+                                                        html_filename = os.path.join(elemento_dir, f"{print_idx}_{self.normalizar_nombre(titulo_tabla)}.html")
+                                                        
+                                                        # Crear un HTML básico con el contenido
+                                                        html_content = f"""
+                                                        <!DOCTYPE html>
+                                                        <html>
+                                                        <head>
+                                                            <meta charset="UTF-8">
+                                                            <title>{titulo_tabla}</title>
+                                                        </head>
+                                                        <body>
+                                                            <h1>{titulo_tabla}</h1>
+                                                            {contenedor_html}
+                                                        </body>
+                                                        </html>
+                                                        """
+                                                        
+                                                        with open(html_filename, 'w', encoding='utf-8') as f:
+                                                            f.write(html_content)
+                                                        
+                                                        logger.info(f"Se guardó el HTML del contenedor en {html_filename}")
+                                                except Exception as e:
+                                                    logger.error(f"Error al encontrar el contenedor '{data_class}': {e}")
+                                            
+                                            # Además de guardar el HTML, también intentamos capturar una imagen
+                                            img_filename = os.path.join(elemento_dir, f"{print_idx}_{self.normalizar_nombre(titulo_tabla)}.png")
+                                            
+                                            # Si encontramos un contenedor específico, hacemos scroll hacia él y lo capturamos
+                                            if data_class:
+                                                try:
+                                                    contenedor = driver.find_element(By.CSS_SELECTOR, f".{data_class}")
+                                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", contenedor)
+                                                    time.sleep(0.5)
+                                                    
+                                                    # Intentar capturar solo ese elemento como imagen
+                                                    driver.save_screenshot(img_filename)
+                                                    logger.info(f"Se guardó captura de pantalla de {titulo_tabla} en {img_filename}")
+                                                except Exception as e:
+                                                    logger.error(f"Error al capturar imagen del contenedor '{data_class}': {e}")
+                                            
+                                        except Exception as e:
+                                            logger.error(f"Error al procesar ícono de impresión {print_idx} en {nombre_elemento}: {e}")
+                                            continue
+                                            
+                                except Exception as e:
+                                    logger.error(f"Error al buscar íconos de impresión en {nombre_elemento}: {e}")
+                                
+                                # También capturamos tablas existentes en caso de que no tengan iconos de impresión
+                                try:
+                                    # Buscar todas las tablas visibles en la página actual
+                                    tablas = driver.find_elements(By.CSS_SELECTOR, "table")
+                                    tablas_visibles = [tabla for tabla in tablas if tabla.is_displayed()]
+                                    
+                                    if tablas_visibles:
+                                        logger.info(f"Se encontraron {len(tablas_visibles)} tablas adicionales en {nombre_elemento}")
+                                        
+                                        for tabla_idx, tabla in enumerate(tablas_visibles, 1):
+                                            try:
+                                                # Identificar la tabla por su ID o crear un nombre
+                                                tabla_id = tabla.get_attribute("id") or f"tabla_adicional_{tabla_idx}"
+                                                
+                                                # Crear un archivo HTML con el contenido de la tabla
+                                                html_filename = os.path.join(elemento_dir, f"adicional_{tabla_idx}_{self.normalizar_nombre(tabla_id)}.html")
+                                                
+                                                # Obtener el HTML de la tabla
+                                                tabla_html = tabla.get_attribute("outerHTML")
+                                                
+                                                # Crear un HTML básico con la tabla
+                                                html_content = f"""
+                                                <!DOCTYPE html>
+                                                <html>
+                                                <head>
+                                                    <meta charset="UTF-8">
+                                                    <title>{tabla_id}</title>
+                                                    <style>
+                                                        table {{ border-collapse: collapse; width: 100%; }}
+                                                        th, td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+                                                        th {{ background-color: #f2f2f2; }}
+                                                    </style>
+                                                </head>
+                                                <body>
+                                                    <h1>{tabla_id}</h1>
+                                                    {tabla_html}
+                                                </body>
+                                                </html>
+                                                """
+                                                
+                                                with open(html_filename, 'w', encoding='utf-8') as f:
+                                                    f.write(html_content)
+                                                
+                                                logger.info(f"Se guardó el HTML de la tabla adicional {tabla_id} en {html_filename}")
+                                                
+                                                # Hacer scroll a la tabla y capturarla como imagen
+                                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tabla)
+                                                time.sleep(0.5)
+                                                
+                                                img_filename = os.path.join(elemento_dir, f"adicional_{tabla_idx}_{self.normalizar_nombre(tabla_id)}.png")
+                                                driver.save_screenshot(img_filename)
+                                                logger.info(f"Se guardó captura de la tabla adicional {tabla_id} en {img_filename}")
+                                                
+                                            except Exception as e:
+                                                logger.error(f"Error al procesar tabla adicional {tabla_idx} en {nombre_elemento}: {e}")
+                                                continue
+                                except Exception as e:
+                                    logger.error(f"Error al buscar tablas adicionales en {nombre_elemento}: {e}")
+                                
+                                # Buscar el botón de cerrar para volver a la vista principal
+                                try:
+                                    cerrar_btn = driver.find_element(By.CSS_SELECTOR, f"a.btn-cerrar[data-trigger='{icon.get_attribute('data-trigger')}']")
+                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cerrar_btn)
+                                    time.sleep(1)
+                                    driver.execute_script("arguments[0].click();", cerrar_btn)
+                                    logger.info(f"Se cerró la vista de {nombre_elemento}")
+                                    time.sleep(2)
+                                except Exception as e:
+                                    logger.error(f"Error al cerrar la vista de {nombre_elemento}: {e}")
+                                    # Intentar presionar ESC para cerrar si el botón no funciona
+                                    webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                                    time.sleep(1)
+                                
+                            except Exception as e:
+                                logger.error(f"Error al procesar ícono {icon_idx} en la sección {titulo_seccion}: {e}")
+                                continue
+                                
+                    except Exception as e:
+                        logger.error(f"Error al buscar íconos en la sección {titulo_seccion}: {e}")
+                        
+                except Exception as e:
+                    logger.error(f"Error al procesar sección {idx}: {e}")
+                    continue
+        except Exception as e:
+            logger.error(f"Error al procesar secciones principales: {e}")
+    
+    def procesar_spans_individuales(self, driver, output_dir):
+        """
+        Busca y procesa spans individuales que son títulos de secciones
+        fuera de los div-container-grey principales
+        """
+        try:
+            # Buscar todos los divs que contienen elementos con clase 'panel-body'
+            panels = driver.find_elements(By.CSS_SELECTOR, "div.panel-body")
+            
+            if not panels:
+                logger.warning("No se encontraron paneles individuales")
+                return
+                
+            logger.info(f"Se encontraron {len(panels)} paneles individuales")
+            
+            # Para cada panel, buscar elementos h3 y crear carpetas para cada uno
+            for idx, panel in enumerate(panels, 1):
+                try:
+                    # Buscar el h3 dentro del panel
+                    h3 = panel.find_element(By.CSS_SELECTOR, "h3")
+                    titulo = h3.text.strip()
+                    
+                    if not titulo:
+                        continue
+                        
+                    logger.info(f"Procesando panel individual: {titulo}")
+                    
+                    # Crear carpeta para este panel
+                    panel_dir = os.path.join(output_dir, f"Panel_{idx}_{self.normalizar_nombre(titulo)}")
+                    os.makedirs(panel_dir, exist_ok=True)
+                    
+                    # Capturar screenshot del panel
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", panel)
+                    time.sleep(0.5)
+                    driver.save_screenshot(os.path.join(panel_dir, "panel.png"))
+                    
+                    # Guardar el HTML del panel
+                    panel_html = panel.get_attribute("outerHTML")
+                    with open(os.path.join(panel_dir, "panel.html"), 'w', encoding='utf-8') as f:
+                        f.write(panel_html)
+                    
+                    # Buscar tablas cercanas a este panel
+                    try:
+                        # Buscar el elemento padre del panel y luego buscar tablas dentro
+                        parent_div = panel.find_element(By.XPATH, "..")
+                        tablas = parent_div.find_elements(By.CSS_SELECTOR, "table")
+                        
+                        if tablas:
+                            logger.info(f"Se encontraron {len(tablas)} tablas en el panel {titulo}")
+                            
+                            for tabla_idx, tabla in enumerate(tablas, 1):
+                                try:
+                                    # Identificar la tabla por su ID o crear un nombre
+                                    tabla_id = tabla.get_attribute("id") or f"tabla_panel_{tabla_idx}"
+                                    
+                                    # Crear un archivo HTML con el contenido de la tabla
+                                    html_filename = os.path.join(panel_dir, f"{tabla_idx}_{self.normalizar_nombre(tabla_id)}.html")
+                                    
+                                    # Obtener el HTML de la tabla
+                                    tabla_html = tabla.get_attribute("outerHTML")
+                                    
+                                    # Crear un HTML básico con la tabla
+                                    html_content = f"""
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <meta charset="UTF-8">
+                                        <title>{titulo} - {tabla_id}</title>
+                                        <style>
+                                            table {{ border-collapse: collapse; width: 100%; }}
+                                            th, td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+                                            th {{ background-color: #f2f2f2; }}
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <h1>{titulo}</h1>
+                                        {tabla_html}
+                                    </body>
+                                    </html>
+                                    """
+                                    
+                                    with open(html_filename, 'w', encoding='utf-8') as f:
+                                        f.write(html_content)
+                                    
+                                    logger.info(f"Se guardó el HTML de la tabla {tabla_id} en {html_filename}")
+                                    
+                                    # Hacer scroll a la tabla y capturarla como imagen
+                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tabla)
+                                    time.sleep(0.5)
+                                    
+                                    img_filename = os.path.join(panel_dir, f"{tabla_idx}_{self.normalizar_nombre(tabla_id)}.png")
+                                    driver.save_screenshot(img_filename)
+                                    logger.info(f"Se guardó captura de la tabla {tabla_id} en {img_filename}")
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error al procesar tabla {tabla_idx} en el panel {titulo}: {e}")
+                                    continue
+                        
+                    except Exception as e:
+                        logger.error(f"Error al buscar tablas en el panel {titulo}: {e}")
+                    
+                except Exception as e:
+                    logger.error(f"Error al procesar panel {idx}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error al procesar spans individuales: {e}")
+    
+    def normalizar_nombre(self, nombre):
+        """
+        Normaliza un nombre para usarlo como nombre de archivo o carpeta
+        """
+        # Reemplazar caracteres no válidos y espacios
+        nombre_normalizado = nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
+        nombre_normalizado = ''.join(c for c in nombre_normalizado if c.isalnum() or c in '_-.')
+        return nombre_normalizado
     
     def procesar_contribuyente(self, contribuyente, año):
         """Procesa toda la información de un contribuyente"""
@@ -615,7 +945,7 @@ class NuestraParteExtractor:
                 return False
             
             # Procesar Nuestra Parte
-            resultado = self.procesar_nuestra_parte(driver, año, path_contribuyente)
+            resultado = self.procesar_nuestra_parte(driver, cuit, año, path_contribuyente)
             
             if resultado:
                 logger.info(f"Procesamiento de {nombre} completado exitosamente")
