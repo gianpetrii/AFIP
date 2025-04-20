@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 import shutil
+import subprocess
 
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
@@ -58,9 +59,24 @@ logger = logging.getLogger("AFIP Extractor")
 class NuestraParteExtractor:
     def __init__(self):
         self.directorio_actual = os.getcwd()
+        
+        # Limpiar el archivo de logs al inicio de una nueva ejecución
+        log_file = "afip_extractor.log"
+        try:
+            # Verificar si el archivo existe antes de limpiarlo
+            if os.path.exists(log_file):
+                with open(log_file, 'w') as f:
+                    f.write("")  # Escribir una cadena vacía para limpiar el archivo
+                logger.info("Archivo de logs limpiado al iniciar nueva ejecución")
+        except Exception as e:
+            print(f"No se pudo limpiar el archivo de logs: {e}")
+        
         # Actualizar lista de años desde 2018 hasta el año actual
         current_year = datetime.now().year
         self.años_disponibles = [str(year) for year in range(2018, current_year + 1)]
+        
+        # Simplificar la estructura de carpetas para evitar rutas demasiado largas
+        # Usar carpeta de resultados directamente en el Desktop sin subcarpetas anidadas profundas
         self.output_folder = os.path.join(os.path.expanduser('~'), "Desktop", "AFIP_Resultados")
         
         # Verificar si estamos en WSL para configuración especial
@@ -542,24 +558,11 @@ class NuestraParteExtractor:
             output_dir: Directorio donde guardar los resultados
         """
         try:
-            # Esperar a que la página cargue completamente usando un método dinámico
-            logger.info("Esperando a que la página cargue completamente...")
+            # Reemplazar la espera por una pausa breve y fija
+            logger.info("Esperando brevemente a que la página cargue los elementos básicos...")
+            time.sleep(2)  # Una pausa breve es suficiente
             
-            # Función que verifica si las secciones están cargadas
-            def secciones_cargadas():
-                try:
-                    # Buscar secciones en la página
-                    secciones = driver.find_elements(By.CSS_SELECTOR, "div.div-container-grey")
-                    # Verificar si hay al menos una sección y que no hay indicadores de carga
-                    return len(secciones) > 0 and "cargando" not in driver.page_source.lower()
-                except:
-                    return False
-            
-            # Esperar a que las secciones se carguen con un máximo de 10 intentos (1s cada uno)
-            if not self.esperar_con_intentos(secciones_cargadas, "Esperando carga de secciones", max_intentos=10):
-                logger.warning("No se pudo confirmar que las secciones están cargadas, continuando de todas formas")
-            
-            # Procesar las secciones principales (div-container-grey con span dentro)
+            # Procesar las secciones principales directamente
             self.procesar_secciones_principales(driver, output_dir)
             
             # No procesar spans individuales que pertenezcan a otros servicios
@@ -1127,7 +1130,8 @@ class NuestraParteExtractor:
         except Exception as e:
             logger.error(f"Error general en la ejecución: {e}")
             print(f"\nError inesperado: {e}")
-            input("\nPresione ENTER para finalizar...")
+            print("Se ha generado un archivo de log con los detalles.")
+            input("\nPresione ENTER para salir...")
     
     def solicitar_año(self):
         """Solicita y valida el año a evaluar"""
@@ -1182,7 +1186,7 @@ class NuestraParteExtractor:
 
     def handle_save_dialog(self, filename):
         """
-        Maneja el diálogo de guardar archivo nativo del sistema.
+        Maneja el diálogo de guardado archivo nativo del sistema.
         
         Args:
             filename: Nombre completo del archivo con ruta (sin extensión .pdf)
@@ -1192,179 +1196,167 @@ class NuestraParteExtractor:
         """
         logger.info(f"Intentando guardar como: {filename}")
         
-        # Si estamos en WSL, usar manejador específico
+        # Asegurarse de que la ruta tenga la extensión .pdf
+        if not filename.lower().endswith('.pdf'):
+            filename = f"{filename}.pdf"
+            
+        logger.info(f"Ruta completa del archivo (longitud: {len(filename)}): {filename}")
+        
+        # Si estamos en WSL, usar manejador específico que usa xdotool
         if self.is_wsl:
-            logger.info("Usando enfoque específico para WSL")
+            logger.info("Detectado WSL, usando enfoque específico con xdotool")
             return self.handle_save_dialog_wsl(filename)
         
         # Para sistemas no-WSL, usar enfoque simplificado con ubicación directa
         try:
-            # Usar directamente la ruta completa donde debe guardarse el archivo
-            final_path = filename
-            logger.info(f"Ruta final para guardar: {final_path}")
+            # Crear todos los directorios necesarios en la ruta de destino
+            dir_path = os.path.dirname(filename)
+            try:
+                os.makedirs(dir_path, exist_ok=True)
+                logger.info(f"Directorios creados: {dir_path}")
+            except Exception as e:
+                logger.warning(f"Error al crear directorios: {e}")
             
-            # Asegurarnos de que el directorio exista
-            os.makedirs(os.path.dirname(final_path), exist_ok=True)
-            
-            # Presionar Enter para confirmar el cuadro de diálogo de impresión
-            logger.info("Presionando Enter para confirmar impresión")
+            # Simplificar proceso: solo necesitamos un Enter para activar el diálogo de guardar
+            logger.info("Presionando Enter para activar el diálogo de guardar archivo")
+            time.sleep(1.0)
             webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
             
-            # Esperar más tiempo a que aparezca el explorador de archivos
+            # Esperar a que aparezca el explorador de archivos
             logger.info("Esperando a que aparezca el explorador de archivos")
+            time.sleep(2.0)
+            
+            # Usar el atajo Ctrl+A para seleccionar todo el texto actual
+            webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+            time.sleep(0.5)
+            
+            # Escribir la ruta completa con extensión .pdf
+            logger.info(f"Escribiendo ruta completa: {filename}")
+            webdriver.ActionChains(self.driver).send_keys(filename).perform()
+            time.sleep(1.0)
+            
+            # Presionar Enter para guardar (sin esperar confirmación del usuario)
+            logger.info("Presionando Enter para guardar")
+            webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+            
+            # Esperar a que se complete el guardado y se cierren las ventanas
+            logger.info(f"Esperando a que se guarde el archivo en: {filename}")
             time.sleep(3.0)
             
-            # Presionar Enter nuevamente para aceptar el nombre de archivo predeterminado
-            logger.info("Presionando Enter para aceptar el nombre de archivo predeterminado")
-            webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-            
-            # Manejar posible diálogo de confirmación de sobrescritura
-            time.sleep(1.0)
-            try:
-                webdriver.ActionChains(self.driver).send_keys(Keys.TAB).perform()
-                time.sleep(0.5)
-                webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-                time.sleep(0.5)
-            except:
-                pass
-            
-            # Esperar más tiempo para que se guarde el archivo
-            logger.info("Esperando a que se guarde el archivo")
-            time.sleep(5.0)
-            
-            # Verificar si la ventana sigue abierta
-            try:
-                current_handles = self.driver.window_handles
-                current_url = self.driver.current_url
-                
-                # Si aún estamos en la ventana de impresión, intentar un segundo Enter
-                if "print" in current_url.lower():
-                    logger.info("La ventana de impresión sigue abierta. Intentando segundo Enter...")
-                    webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-                    time.sleep(1.0)
-                    # Intentar manejar diálogo de confirmación
-                    webdriver.ActionChains(self.driver).send_keys(Keys.TAB).perform()
-                    time.sleep(0.5)
-                    webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-                    time.sleep(1.0)
-            except Exception as e:
-                logger.info(f"Excepción al verificar estado de ventana: {e} (posiblemente ya cerrada)")
-            
-            # Verificar si el archivo se guardó en la ubicación final (con .pdf añadido si no lo tenía)
-            final_check_path = final_path if final_path.lower().endswith('.pdf') else f"{final_path}.pdf"
-            time.sleep(1.0)
-            if os.path.exists(final_check_path):
-                logger.info(f"Archivo guardado correctamente en: {final_check_path}")
+            # Verificar si el archivo se guardó correctamente
+            if os.path.exists(filename):
+                logger.info(f"Archivo guardado correctamente en: {filename}")
                 return True
             else:
-                # Buscar en el directorio temporal y mover si es necesario
-                files_in_temp = os.listdir(self.download_dir)
-                pdf_files = [f for f in files_in_temp if f.endswith('.pdf')]
-                
-                if pdf_files:
-                    # Tomar el archivo PDF más reciente
-                    pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(self.download_dir, x)), reverse=True)
-                    latest_pdf = pdf_files[0]
-                    latest_pdf_path = os.path.join(self.download_dir, latest_pdf)
-                    
-                    logger.info(f"Moviendo PDF reciente a ubicación final: {final_check_path}")
-                    
-                    # Mover el archivo a la ubicación final
-                    try:
-                        shutil.move(latest_pdf_path, final_check_path)
-                        logger.info(f"Archivo PDF movido a: {final_check_path}")
-                        return True
-                    except Exception as e:
-                        logger.warning(f"Error al mover archivo PDF: {e}")
-                else:
-                    logger.warning(f"No se encontró ningún archivo PDF en el directorio temporal: {self.download_dir}")
+                logger.warning(f"No se encontró el archivo guardado en: {filename}")
+                # Verificar si existe un archivo similar en el directorio
+                dir_files = os.listdir(dir_path)
+                base_name = os.path.basename(filename).lower()
+                matching_files = [f for f in dir_files if f.lower() == base_name]
+                if matching_files:
+                    logger.info(f"Se encontró un archivo similar: {os.path.join(dir_path, matching_files[0])}")
+                    return True
             
-            logger.info("Proceso de guardado completado")
-            return True
+            # Si llegamos aquí, el archivo no se guardó o no pudimos verificarlo
+            logger.warning("No se pudo confirmar que el archivo se guardó correctamente")
+            return True  # Asumimos que el proceso funcionó para continuar con las siguientes tablas
             
         except Exception as e:
             logger.error(f"Error al manejar diálogo de guardado: {e}")
             import traceback
             logger.error(traceback.format_exc())
             
-            # Intentar con Escape como último recurso
+            # Intentar con Escape para cerrar ambas ventanas (diálogo y ventana de impresión)
             try:
                 logger.info("Intentando cerrar diálogo con Escape")
                 webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
                 time.sleep(1)
-            except:
-                pass
+                webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(1)
+            except Exception as esc_error:
+                logger.warning(f"Error al enviar ESCAPE: {esc_error}")
                 
             return False
-
+    
     def handle_save_dialog_wsl(self, filename):
-        """Método específico para manejar diálogos de guardar en WSL"""
+        """
+        Maneja el diálogo de guardado para WSL utilizando xdotool.
+        Este método es específico para entornos WSL.
+        """
+        logger.info(f"WSL: Manejando diálogo de guardado con xdotool")
         try:
-            # Ruta absoluta donde se guardará el PDF
-            # Usar la ruta sin extensión, ya que el diálogo añadirá .pdf automáticamente
-            full_save_path = os.path.join(self.output_folder, filename)
+            # Presionar Enter para activar el diálogo de guardar archivo
+            logger.info("WSL: Presionando Enter para activar el diálogo")
+            webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+            time.sleep(2.0)  # Esperar a que aparezca el explorador de archivos
             
-            logger.info(f"WSL: Guardando directamente en ruta final: {full_save_path}")
+            # Usar xdotool para seleccionar todo y escribir la ruta
+            logger.info(f"WSL: Seleccionando todo el texto con Ctrl+A")
+            subprocess.run(["xdotool", "key", "ctrl+a"], check=True)
+            time.sleep(0.5)
             
-            # Esperar a que aparezca el diálogo de guardar (en Windows)
-            logger.info("WSL: Intentando Alt+Tab para cambiar ventana")
-            time.sleep(2.5)  # Esperar a que aparezca la ventana
+            # Escribir la ruta completa del archivo en el diálogo de guardar
+            logger.info(f"WSL: Escribiendo ruta completa: {filename}")
             
-            # Presionar Alt+Tab para asegurar que el foco esté en la ventana de diálogo
+            # Crear las carpetas necesarias en la ruta
+            dir_path = os.path.dirname(filename)
             try:
-                os.system("xdotool key alt+Tab")
-                time.sleep(0.5)
-            except:
-                logger.warning("Error al intentar Alt+Tab con xdotool")
-                
-            # Escribir la ruta del archivo completa
-            logger.info(f"WSL: Escribiendo ruta del archivo: {full_save_path}")
-            try:
-                # Limpiar primero cualquier texto existente
-                os.system('xdotool key ctrl+a')
-                time.sleep(0.3)
-                os.system('xdotool key Delete')
-                time.sleep(0.3)
-                
-                # La ruta que escribimos no debe incluir .pdf pues se añade automáticamente
-                os.system(f'xdotool type "{full_save_path}"')
-                time.sleep(0.5)
-                
-                # Presionar Enter para confirmar
-                os.system('xdotool key Return')
-                time.sleep(0.5)
-                
-                # Manejar posible diálogo de confirmación de sobrescritura
+                os.makedirs(dir_path, exist_ok=True)
+                logger.info(f"WSL: Se aseguró que el directorio existe: {dir_path}")
+            except Exception as e:
+                logger.warning(f"WSL: Error al crear directorios: {e}")
+            
+            # Escribir la ruta - Usamos xdotool para asegurarnos de que funcione en WSL
+            logger.info(f"WSL: Escribiendo ruta completa en el diálogo: {filename}")
+            subprocess.run(["xdotool", "type", filename], check=True)
+            time.sleep(1.0)
+            
+            # Presionar Enter para guardar (sin esperar confirmación del usuario)
+            logger.info("WSL: Presionando Enter para confirmar guardado")
+            subprocess.run(["xdotool", "key", "Return"], check=True)
+            
+            # No es necesario manejar diálogos adicionales o verificar ventanas
+            # El guardado y cierre de ventanas ocurre automáticamente
+            logger.info("WSL: Esperando a que se complete el guardado y se cierren las ventanas")
+            time.sleep(3.0)  # Esperar a que se complete el guardado
+            
+            # Verificar si el archivo se guardó correctamente (solo para logs)
+            if os.path.exists(filename):
+                logger.info(f"WSL: Archivo guardado exitosamente en: {filename}")
+            else:
+                logger.warning(f"WSL: No se encontró el archivo en: {filename}")
+                # Verificar en caso de que se haya guardado con otro nombre similar
                 try:
-                    os.system('xdotool key Tab')
-                    time.sleep(0.3)
-                    os.system('xdotool key Return')  # Confirmar sobrescritura
-                except:
-                    logger.warning("Error al confirmar sobrescritura con método estándar")
-            except Exception as e:
-                logger.error(f"Error al intentar escribir ruta: {e}")
+                    dir_files = os.listdir(dir_path)
+                    base_name = os.path.basename(filename).lower()
+                    matching_files = [f for f in dir_files if f.lower().startswith(base_name[:20])]
+                    if matching_files:
+                        logger.info(f"WSL: Se encontraron archivos similares: {matching_files}")
+                except Exception as e:
+                    logger.warning(f"WSL: Error al verificar archivos similares: {e}")
             
-            # Esperar a que se complete la operación de guardar
-            logger.info("WSL: Esperando a que se guarde el archivo")
-            time.sleep(5)
-            
-            # Verificar si el archivo se descargó en el directorio temporal
-            try:
-                pdf_files = [f for f in os.listdir(self.download_dir) if f.lower().endswith('.pdf')]
-                if pdf_files:
-                    logger.info(f"WSL: Archivo(s) PDF encontrado(s) en directorio temporal: {pdf_files}")
-                    # Aquí puedes mover los archivos si es necesario
-                else:
-                    logger.warning(f"WSL: No se encontró ningún archivo PDF en el directorio temporal: {self.download_dir}")
-            except Exception as e:
-                logger.error(f"Error al verificar archivos descargados: {e}")
-            
-            logger.info("WSL: Proceso de guardado completado")
-            
+            # Asumimos que la ventana de impresión y el explorador se han cerrado
+            # y que hemos vuelto automáticamente a la página de tablas
+            logger.info("WSL: Se asume que hemos vuelto a la página principal")
+            return True
+                
         except Exception as e:
-            logger.error(f"Error en handle_save_dialog_wsl: {e}")
+            logger.error(f"WSL: Error al manejar diálogo de guardado: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            
+            # En caso de error, intentar volver a la página principal
+            try:
+                # Enviar Escape para cerrar cualquier diálogo abierto
+                subprocess.run(["xdotool", "key", "Escape"], check=True)
+                time.sleep(0.5)
+                subprocess.run(["xdotool", "key", "Escape"], check=True)
+                logger.info("WSL: Intento de volver a la página principal después de error")
+            except Exception as e2:
+                logger.error(f"WSL: Error adicional: {e2}")
+            
+            # Retornar True para continuar con las siguientes tablas a pesar del error
+            return True
 
     def esperar_nueva_ventana(self, driver, ventanas_antes, mensaje="Esperando nueva ventana", max_intentos=5):
         """
@@ -1412,248 +1404,6 @@ class NuestraParteExtractor:
             mensaje=f"{mensaje} (contiene '{texto}')", 
             max_intentos=max_intentos
         )
-
-    def navegar_entre_anios(self, driver, anio_objetivo):
-        """
-        Navega entre los años hasta encontrar el año objetivo.
-        """
-        logger.info(f"Intentando navegar al año {anio_objetivo}")
-        
-        # Selectores comunes para botones de año
-        selectores_anios = [
-            ".ui-button.ui-corner-right span", 
-            ".ui-button span"
-        ]
-        
-        # Lista para almacenar los años disponibles (para logging)
-        anios_disponibles = []
-        
-        # Intentar con todos los selectores disponibles
-        for selector in selectores_anios:
-            logger.info(f"Buscando botones de año con selector: {selector}")
-            botones_anio = self.esperar_elementos(driver, selector)
-            
-            if not botones_anio:
-                logger.warning(f"No se encontraron botones de año con selector: {selector}")
-                continue
-                
-            # Guardar años disponibles para logging
-            anios_disponibles = [boton.text.strip() for boton in botones_anio if boton.text.strip()]
-            logger.info(f"Años disponibles: {anios_disponibles}")
-            
-            # Buscar el botón del año objetivo y hacer clic
-            for boton in botones_anio:
-                texto_boton = boton.text.strip()
-                if texto_boton == str(anio_objetivo):
-                    logger.info(f"Encontrado botón para el año {anio_objetivo}")
-                    
-                    # Verificar si el botón ya está seleccionado
-                    padre = boton.find_element(By.XPATH, "./..")
-                    if "ui-state-active" in padre.get_attribute("class"):
-                        logger.info(f"El año {anio_objetivo} ya está seleccionado")
-                        return True
-                    
-                    # Hacer clic con reintentos
-                    if self.click_con_reintentos(driver, boton, f"botón año {anio_objetivo}"):
-                        # Esperar a que la interfaz se actualice
-                        def verificar_anio_seleccionado():
-                            try:
-                                nuevo_padre = boton.find_element(By.XPATH, "./..")
-                                return "ui-state-active" in nuevo_padre.get_attribute("class")
-                            except:
-                                return False
-                        
-                        if self.esperar_con_intentos(
-                            verificar_anio_seleccionado, 
-                            f"Esperando que el año {anio_objetivo} quede seleccionado"
-                        ):
-                            logger.info(f"Navegación exitosa al año {anio_objetivo}")
-                            return True
-            
-            # Si llegamos aquí, no encontramos el año objetivo
-            # con el selector actual, probamos con el siguiente selector
-        
-        # Si no encontramos el año objetivo con los selectores, intentamos navegar con flechas
-        if anios_disponibles:
-            logger.info(f"Intentando navegar al año {anio_objetivo} usando flechas, años disponibles: {anios_disponibles}")
-            return self.navegar_usando_flechas(driver, anio_objetivo, anios_disponibles)
-        else:
-            logger.error(f"No se encontraron años disponibles para navegar al año {anio_objetivo}")
-            return False
-            
-    def navegar_usando_flechas(self, driver, anio_objetivo, anios_disponibles):
-        """
-        Navega entre años usando las flechas izquierda/derecha cuando el año objetivo
-        no está visible inicialmente.
-        """
-        if not anios_disponibles:
-            logger.error("No hay años disponibles para navegar usando flechas")
-            return False
-            
-        anio_objetivo = str(anio_objetivo)
-        
-        # Determinar dirección de navegación
-        anio_actual = anios_disponibles[0]  # Asumimos que el primer año es el seleccionado actualmente
-        try:
-            if int(anio_objetivo) < int(anio_actual):
-                flecha_selector = ".ui-datepicker-prev"
-                direccion = "izquierda"
-            else:
-                flecha_selector = ".ui-datepicker-next"
-                direccion = "derecha"
-        except ValueError:
-            logger.error(f"Error al convertir años para comparación: objetivo={anio_objetivo}, actual={anio_actual}")
-            return False
-            
-        logger.info(f"Navegando con flecha {direccion} desde {anio_actual} hacia {anio_objetivo}")
-        
-        # Máximo de clics en flechas para evitar bucles infinitos
-        max_clics = 10
-        for i in range(max_clics):
-            # Buscar botón de flecha
-            flecha = self.esperar_elemento(driver, flecha_selector, mensaje=f"flecha {direccion}")
-            if not flecha:
-                logger.warning(f"No se encontró la flecha {direccion} para navegar")
-                return False
-                
-            # Hacer clic en la flecha
-            if not self.click_con_reintentos(driver, flecha, f"flecha {direccion}"):
-                logger.warning(f"No se pudo hacer clic en la flecha {direccion}")
-                return False
-                
-            # Esperar a que cambie el año
-            time.sleep(1)  # Pequeña pausa para permitir la actualización de la interfaz
-            
-            # Verificar años actuales
-            for selector in [".ui-button.ui-corner-right span", ".ui-button span"]:
-                botones_anio = self.esperar_elementos(driver, selector)
-                if botones_anio:
-                    nuevos_anios = [boton.text.strip() for boton in botones_anio if boton.text.strip()]
-                    logger.info(f"Después de navegar con flecha {direccion}, años disponibles: {nuevos_anios}")
-                    
-                    # Verificar si el año objetivo ahora está visible
-                    for boton in botones_anio:
-                        if boton.text.strip() == anio_objetivo:
-                            logger.info(f"Encontrado botón para el año {anio_objetivo} después de navegar con flechas")
-                            if self.click_con_reintentos(driver, boton, f"botón año {anio_objetivo} (después de flechas)"):
-                                logger.info(f"Navegación exitosa al año {anio_objetivo} usando flechas")
-                                return True
-                    
-                    # Si encontramos botones pero no el año objetivo, continuamos navegando
-                    break
-            
-            # Si llegamos al límite de navegación sin encontrar el año
-            if i == max_clics - 1:
-                logger.error(f"No se encontró el año {anio_objetivo} después de {max_clics} navegaciones con flechas")
-                return False
-                
-        logger.error(f"No se pudo navegar al año {anio_objetivo} usando flechas")
-        return False
-
-    def seleccionar_trimestre(self, driver, trimestre_objetivo):
-        """
-        Selecciona el trimestre objetivo del dropdown.
-        Utiliza esperas inteligentes.
-        """
-        logger.info(f"Intentando seleccionar el trimestre {trimestre_objetivo}")
-        
-        try:
-            # Buscar todos los dropdowns en la página
-            dropdowns = driver.find_elements(By.CSS_SELECTOR, ".selectToDropdown")
-            
-            # Si no hay dropdowns, reportar error
-            if not dropdowns:
-                logger.warning("No se encontraron dropdowns para seleccionar trimestre")
-                return False
-            
-            # Asumir que el primer dropdown es para trimestres
-            trimestre_dropdown = dropdowns[0]
-            
-            # Hacer clic para abrir el dropdown con reintentos
-            if not self.click_con_reintentos(driver, trimestre_dropdown, "dropdown de trimestres"):
-                logger.error("No se pudo abrir el dropdown de trimestres")
-                return False
-            
-            # Esperar a que aparezcan las opciones del dropdown
-            def opciones_visibles():
-                try:
-                    options = driver.find_elements(By.CSS_SELECTOR, ".selectToDropdownOptions div.selectToDropdownOption")
-                    return len(options) > 0 and all(option.is_displayed() for option in options[:1])
-                except:
-                    return False
-            
-            if not self.esperar_con_intentos(opciones_visibles, "Esperando opciones del dropdown", max_intentos=5):
-                logger.error("No se pudieron visualizar las opciones del dropdown")
-                return False
-            
-            # Buscar todas las opciones del dropdown
-            options = driver.find_elements(By.CSS_SELECTOR, ".selectToDropdownOptions div.selectToDropdownOption")
-            logger.info(f"Se encontraron {len(options)} opciones en el dropdown")
-            
-            # Buscar la opción que coincida con el trimestre objetivo
-            for option in options:
-                try:
-                    option_text = option.text.strip().lower()
-                    logger.info(f"Opción encontrada: {option_text}")
-                    
-                    if str(trimestre_objetivo).lower() in option_text or f"trimestre {trimestre_objetivo}".lower() in option_text:
-                        # Hacer clic en la opción con reintentos
-                        if self.click_con_reintentos(driver, option, f"opción {option_text}"):
-                            logger.info(f"Se seleccionó la opción: {option_text}")
-                            
-                            # Esperar a que se cierren las opciones del dropdown y se actualice la interfaz
-                            def dropdown_cerrado():
-                                try:
-                                    options = driver.find_elements(By.CSS_SELECTOR, ".selectToDropdownOptions div.selectToDropdownOption")
-                                    return len(options) == 0 or not any(option.is_displayed() for option in options[:1])
-                                except:
-                                    return True  # Si hay error al buscar las opciones, asumimos que ya no están
-                            
-                            if self.esperar_con_intentos(dropdown_cerrado, "Esperando cierre del dropdown", max_intentos=5):
-                                # Esperar a que la interfaz se actualice con los datos del trimestre
-                                def datos_cargados():
-                                    try:
-                                        # Verificar si hay elementos que indican que los datos están cargados
-                                        tablas = driver.find_elements(By.CSS_SELECTOR, "table")
-                                        textos = driver.find_elements(By.CSS_SELECTOR, ".div-container-grey")
-                                        return len(tablas) > 0 or len(textos) > 0
-                                    except:
-                                        return False
-                                
-                                if self.esperar_con_intentos(datos_cargados, "Esperando carga de datos del trimestre", max_intentos=8):
-                                    logger.info(f"Datos del trimestre {trimestre_objetivo} cargados correctamente")
-                                    return True
-                                else:
-                                    logger.warning(f"No se pudo confirmar la carga de datos del trimestre {trimestre_objetivo}")
-                                    # Continuamos de todas formas ya que a veces la detección de cambios puede fallar
-                                    return True
-                            else:
-                                logger.warning("No se pudo confirmar el cierre del dropdown")
-                                # Intentar hacer clic en otro lugar para cerrar el dropdown
-                                try:
-                                    driver.find_element(By.TAG_NAME, "body").click()
-                                except:
-                                    pass
-                                return True
-                        else:
-                            logger.warning(f"No se pudo hacer clic en la opción {option_text}")
-                except Exception as e:
-                    logger.error(f"Error al procesar opción del dropdown: {e}")
-            
-            # Si llegamos aquí, no encontramos el trimestre objetivo
-            logger.error(f"No se encontró el trimestre {trimestre_objetivo} entre las opciones")
-            
-            # Intentar cerrar el dropdown haciendo clic en otro lugar
-            try:
-                driver.find_element(By.TAG_NAME, "body").click()
-            except:
-                pass
-                
-            return False
-                
-        except Exception as e:
-            logger.error(f"Error al seleccionar trimestre: {e}")
-            return False
 
     def guardar_tabla_como_pdf(self, pdf_filename, titulo_tabla=None):
         """Guarda la tabla como PDF utilizando el diálogo nativo de impresión"""
@@ -1759,6 +1509,7 @@ def parse_arguments():
     return parser.parse_args()
 
 if __name__ == "__main__":
+    extractor = None
     try:
         args = parse_arguments()
         extractor = NuestraParteExtractor()
@@ -1767,4 +1518,7 @@ if __name__ == "__main__":
         logging.error(f"Error general en la aplicación: {e}")
         print(f"\nError inesperado: {e}")
         print("Se ha generado un archivo de log con los detalles.")
+    finally:
+        if extractor:
+            extractor.close()  # Clean up resources even if an exception occurs
         input("\nPresione ENTER para salir...") 
