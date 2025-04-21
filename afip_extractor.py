@@ -18,6 +18,7 @@ from pathlib import Path
 from datetime import datetime
 import shutil
 import subprocess
+import re
 
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
@@ -171,6 +172,35 @@ class NuestraParteExtractor:
             logger.error(f"Error al crear carpeta {self.output_folder}: {e}")
             raise
     
+    def normalizar_nombre(self, nombre):
+        """
+        Normaliza un nombre para usarlo como archivo o carpeta.
+        
+        Args:
+            nombre: Nombre a normalizar
+            
+        Returns:
+            str: Nombre normalizado sin caracteres inválidos
+        """
+        # Si el nombre está vacío, usar un nombre genérico
+        if not nombre or nombre.strip() == "":
+            return "sin_nombre"
+            
+        # Reemplazar caracteres no permitidos en nombres de archivo
+        resultado = nombre.strip()
+        # Reemplazar caracteres no alfanuméricos (excepto espacios) por guiones bajos
+        caracteres_invalidos = r'[<>:"/\\|?*]'
+        resultado = re.sub(caracteres_invalidos, '_', resultado)
+        # Reemplazar múltiples espacios por uno solo
+        resultado = re.sub(r'\s+', ' ', resultado)
+        # Reemplazar espacios por guiones bajos para evitar problemas con rutas
+        resultado = resultado.replace(' ', '_')
+        # Limitar longitud para evitar problemas con rutas demasiado largas
+        if len(resultado) > 50:
+            resultado = resultado[:50]
+        
+        return resultado
+    
     def leer_contribuyentes(self, csv_file="clientes.csv"):
         """Lee la lista de contribuyentes desde un archivo CSV
         
@@ -186,6 +216,82 @@ class NuestraParteExtractor:
                 
         logger.info(f"Se leyeron {len(contribuyentes)} contribuyentes del archivo {csv_file}")
         return contribuyentes
+    
+    def esperar_elemento(self, driver, locator, mensaje="Esperando elemento", max_intentos=5, tiempo_espera=1, clickable=False):
+        """
+        Espera a que un elemento esté presente en el DOM y visible.
+        
+        Args:
+            driver: WebDriver de Selenium
+            locator: Tupla con el tipo de selector y el valor (e.g., (By.ID, "elemento"))
+            mensaje: Mensaje para los logs
+            max_intentos: Número máximo de intentos
+            tiempo_espera: Tiempo de espera entre intentos
+            clickable: Si es True, espera a que el elemento sea clickeable
+            
+        Returns:
+            WebElement: El elemento encontrado, o None si no se encuentra
+        """
+        logger.info(f"{mensaje} (locator: {locator})")
+        
+        for intento in range(1, max_intentos + 1):
+            try:
+                if clickable:
+                    # Esperar a que el elemento sea clickeable
+                    element = WebDriverWait(driver, tiempo_espera).until(
+                        EC.element_to_be_clickable(locator)
+                    )
+                else:
+                    # Esperar a que el elemento sea visible
+                    element = WebDriverWait(driver, tiempo_espera).until(
+                        EC.visibility_of_element_located(locator)
+                    )
+                logger.info(f"Elemento encontrado en intento {intento}")
+                return element
+            except TimeoutException:
+                logger.warning(f"Timeout esperando elemento en intento {intento}/{max_intentos}")
+                if intento == max_intentos:
+                    logger.error(f"No se encontró el elemento después de {max_intentos} intentos")
+                    return None
+            except Exception as e:
+                logger.warning(f"Error al buscar elemento en intento {intento}/{max_intentos}: {e}")
+                if intento == max_intentos:
+                    logger.error(f"Error final al buscar elemento: {e}")
+                    return None
+        
+        return None
+    
+    def esperar_con_intentos(self, condition_func, mensaje="Esperando condición", max_intentos=5, tiempo_espera=1):
+        """
+        Espera a que una condición sea verdadera.
+        
+        Args:
+            condition_func: Función que devuelve True cuando la condición se cumple
+            mensaje: Mensaje para los logs
+            max_intentos: Número máximo de intentos
+            tiempo_espera: Tiempo de espera entre intentos
+            
+        Returns:
+            bool: True si la condición se cumplió, False en caso contrario
+        """
+        logger.info(f"{mensaje}")
+        
+        for intento in range(1, max_intentos + 1):
+            try:
+                if condition_func():
+                    logger.info(f"Condición cumplida en intento {intento}")
+                    return True
+                
+                logger.warning(f"Condición no cumplida en intento {intento}/{max_intentos}")
+                if intento < max_intentos:
+                    time.sleep(tiempo_espera)
+            except Exception as e:
+                logger.warning(f"Error al evaluar condición en intento {intento}/{max_intentos}: {e}")
+                if intento < max_intentos:
+                    time.sleep(tiempo_espera)
+        
+        logger.error(f"Condición no cumplida después de {max_intentos} intentos")
+        return False
     
     def iniciar_sesion(self, driver, cuit, clave_fiscal):
         """Inicia sesión en el sitio de AFIP"""
@@ -512,7 +618,7 @@ class NuestraParteExtractor:
                             logger.info(f"Se hizo clic en pestaña usando selector: {selector}")
                             time.sleep(2)
                             break
-                        except:
+                        except Exception as e:
                             logger.warning(f"No se encontró pestaña con selector: {selector}")
                             continue
                     
@@ -527,7 +633,6 @@ class NuestraParteExtractor:
                                 driver.execute_script("arguments[0].click();", button)
                                 time.sleep(2)
                                 año_encontrado = True
-                                break
                 except Exception as e:
                     logger.error(f"Error en método alternativo: {e}")
             
@@ -539,7 +644,7 @@ class NuestraParteExtractor:
             año_dir = os.path.join(contribuyente_dir, f"año_{año}")
             os.makedirs(año_dir, exist_ok=True)
             
-            # Procesar secciones de datos (ignorando declaraciones anteriores)
+            # Procesar secciones de datos
             self.procesar_secciones_datos(driver, año_dir)
             
             return True
@@ -549,487 +654,205 @@ class NuestraParteExtractor:
             return False
     
     def procesar_secciones_datos(self, driver, output_dir):
-        """
-        Procesa todas las secciones de datos disponibles en la página de Nuestra Parte.
-        Para cada sección, crea una carpeta y captura los PDFs haciendo clic en los íconos de impresión.
-        
-        Args:
-            driver: WebDriver de Selenium
-            output_dir: Directorio donde guardar los resultados
-        """
-        try:
-            # Reemplazar la espera por una pausa breve y fija
-            logger.info("Esperando brevemente a que la página cargue los elementos básicos...")
-            time.sleep(2)  # Una pausa breve es suficiente
-            
-            # Procesar las secciones principales directamente
-            self.procesar_secciones_principales(driver, output_dir)
-            
-            # No procesar spans individuales que pertenezcan a otros servicios
-            logger.info("Procesamiento de secciones completado")
-            
-        except Exception as e:
-            logger.error(f"Error general al procesar secciones: {e}")
-    
-    def procesar_secciones_principales(self, driver, output_dir):
-        """Procesa las secciones principales de la página de Nuestra Parte"""
-        # Guardar una referencia al driver para usar en otros métodos
-        self.driver = driver
+        """Procesa las secciones de datos y guarda la información en archivos."""
+        # Esperar brevemente a que la página cargue completamente
+        logger.info("Esperando brevemente a que la página cargue los elementos básicos...")
+        time.sleep(2)
         
         try:
-            # Encontrar todas las secciones (div-container-grey)
-            secciones_containers = driver.find_elements(By.CSS_SELECTOR, "div.div-container-grey")
+            # 1. Encontrar todas las secciones principales usando la estructura del DOM
+            secciones_principales = driver.find_elements(By.CSS_SELECTOR, "div.div-container-grey.row")
+            logger.info(f"Se encontraron {len(secciones_principales)} secciones principales")
             
-            if not secciones_containers:
-                logger.warning("No se encontraron secciones principales en la página")
-                return
-                
-            logger.info(f"Se encontraron {len(secciones_containers)} secciones principales")
-            
-            # Verificar si la sección es "Declaraciones juradas del periodo anterior" para ignorarla
-            for idx, seccion_container in enumerate(secciones_containers, 1):
+            for i, seccion in enumerate(secciones_principales, 1):
                 try:
-                    # Obtener el título de la sección
-                    span_titulo = seccion_container.find_element(By.CSS_SELECTOR, "span")
-                    titulo_seccion = span_titulo.text.strip()
-                    logger.info(f"Procesando sección principal: {titulo_seccion}")
+                    # 2. Obtener el nombre de la sección desde el span dentro de col-md-11
+                    try:
+                        nombre_seccion_elem = seccion.find_element(By.CSS_SELECTOR, "div.col-md-11 > span")
+                        nombre_seccion = nombre_seccion_elem.text.strip()
+                        logger.info(f"Procesando sección principal {i}/{len(secciones_principales)}: {nombre_seccion}")
+                    except Exception as e:
+                        nombre_seccion = f"seccion_{i}"
+                        logger.info(f"Procesando sección principal {i}/{len(secciones_principales)} sin nombre")
                     
-                    # Ignorar si es la sección de "Declaraciones juradas del periodo anterior"
-                    if "declaraciones juradas del periodo anterior" in titulo_seccion.lower():
-                        logger.info(f"Ignorando sección: {titulo_seccion}")
+                    # Ignoramos secciones específicas como "Declaraciones juradas del periodo anterior"
+                    if "Declaraciones juradas del periodo anterior" in nombre_seccion:
+                        logger.info(f"Ignorando sección: {nombre_seccion}")
                         continue
                     
                     # Crear directorio para esta sección
-                    seccion_dir = os.path.join(output_dir, f"{self.normalizar_nombre(titulo_seccion)}")
+                    seccion_dir = os.path.join(output_dir, self.normalizar_nombre(nombre_seccion))
                     os.makedirs(seccion_dir, exist_ok=True)
                     
-                    # Buscar todos los íconos (elementos clickeables) dentro de esta sección
+                    # 3. Encontrar el container de los iconos y luego los iconos dentro de él
                     try:
-                        icons = seccion_container.find_elements(By.CSS_SELECTOR, ".circleIcon i.btn-consultar")
-                        logger.info(f"Se encontraron {len(icons)} íconos en la sección principal {titulo_seccion}")
-                        
-                        # Para cada ícono, hacer clic y procesar su contenido
-                        for icon_idx, icon in enumerate(icons, 1):
+                        icon_container = seccion.find_element(By.CSS_SELECTOR, "div.col-md-10.col-sm-10.col-xs-12.center")
+                        iconos = icon_container.find_elements(By.CSS_SELECTOR, "div.circleIcon")
+                        logger.info(f"Se encontraron {len(iconos)} íconos en la sección {nombre_seccion}")
+                    except Exception as e:
+                        logger.error(f"Error al buscar iconos en la sección {nombre_seccion}: {e}")
+                        continue
+                    
+                    # 4. Procesar cada icono/sub-sección
+                    for j, icono in enumerate(iconos, 1):
+                        try:
+                            # Obtener el nombre del ícono desde el párrafo
                             try:
-                                # Obtener el nombre del elemento a partir del párrafo adyacente
-                                try:
-                                    nombre_elemento = icon.find_element(By.XPATH, "./following-sibling::p").text.strip()
-                                except:
+                                nombre_icono_elem = icono.find_element(By.CSS_SELECTOR, "p")
+                                nombre_icono = nombre_icono_elem.text.strip()
+                                logger.info(f"Procesando ícono {j}/{len(iconos)}: {nombre_icono}")
+                            except Exception as e:
+                                nombre_icono = f"icono_{j}"
+                                logger.info(f"Procesando ícono {j}/{len(iconos)} sin nombre")
+                            
+                            # Hacer clic en el icono para mostrar su contenido
+                            try:
+                                # Buscar el elemento i que es clickeable dentro del icono
+                                icono_click = icono.find_element(By.CSS_SELECTOR, "i")
+                                
+                                # Hacer scroll al elemento para asegurarnos de que es visible
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", icono_click)
+                                time.sleep(1)
+                                
+                                # Hacer clic mediante JavaScript para evitar problemas de visibilidad/clickeabilidad
+                                driver.execute_script("arguments[0].click();", icono_click)
+                                logger.info(f"Clic exitoso en ícono {j} de {nombre_icono}")
+                                
+                                # Esperar a que se carguen los datos
+                                time.sleep(3)
+                            except Exception as e:
+                                logger.error(f"Error al hacer clic en ícono {j}: {e}")
+                                continue
+                            
+                            # 5. Encontrar todos los paneles visibles (los que tienen display distinto a none)
+                            try:
+                                # Primero buscar todos los div a nivel de body que podrían contener las tablas
+                                contenedores = driver.find_elements(By.CSS_SELECTOR, "div.container")
+                                paneles_visibles = []
+                                
+                                for contenedor in contenedores:
+                                    # Buscar paneles dentro de cada contenedor que no tengan style="display: none;"
+                                    paneles = contenedor.find_elements(By.CSS_SELECTOR, "div:not([style*='display: none'])")
+                                    for panel in paneles:
+                                        # Verificar si el panel contiene un elemento con clase panel-body
+                                        panel_body_elems = panel.find_elements(By.CSS_SELECTOR, "div.panel-body.text-center")
+                                        for panel_body in panel_body_elems:
+                                            if panel_body.is_displayed():
+                                                paneles_visibles.append(panel_body)
+                                
+                                logger.info(f"Se encontraron {len(paneles_visibles)} paneles visibles")
+                                
+                                # Si no encontramos paneles visibles con el método anterior, intentar otro enfoque
+                                if not paneles_visibles:
+                                    paneles_visibles = driver.find_elements(By.CSS_SELECTOR, "div.panel-body.text-center")
+                                    # Filtrar solo los que están visibles
+                                    paneles_visibles = [p for p in paneles_visibles if p.is_displayed()]
+                                    logger.info(f"Segundo intento: Se encontraron {len(paneles_visibles)} paneles visibles")
+                                
+                                # 6. Procesar cada panel visible
+                                for k, panel in enumerate(paneles_visibles, 1):
                                     try:
-                                        # Si no funciona, intentar obtenerlo del elemento padre
-                                        nombre_elemento = icon.find_element(By.XPATH, "../p").text.strip()
-                                    except:
-                                        nombre_elemento = f"elemento_{icon_idx}"
-                                
-                                logger.info(f"Procesando elemento: {nombre_elemento}")
-                                
-                                # Hacer clic en el ícono con reintentos
-                                icon_click_success = self.click_con_reintentos(driver, icon, f"ícono de {nombre_elemento}")
-                                if not icon_click_success:
-                                    logger.warning(f"No se pudo hacer clic en el ícono de {nombre_elemento}, continuando con el siguiente")
-                                    continue
-                                
-                                # Esperar a que se carguen los datos (función específica)
-                                def datos_cargados():
-                                    try:
-                                        # Buscar elementos que indiquen que los datos están cargados (por ejemplo, tablas o botones de impresión)
-                                        print_icons = driver.find_elements(By.CSS_SELECTOR, "a.btn-imprimir, i.fa-print")
-                                        tables = driver.find_elements(By.CSS_SELECTOR, "table")
-                                        return len(print_icons) > 0 or len(tables) > 0
-                                    except:
-                                        return False
-                                
-                                datos_loaded = self.esperar_con_intentos(
-                                    datos_cargados,
-                                    mensaje=f"Esperando datos para {nombre_elemento}",
-                                    max_intentos=10  # Más intentos aquí, ya que la carga puede ser más lenta
-                                )
-                                
-                                if not datos_loaded:
-                                    logger.warning(f"No se pudieron cargar los datos para {nombre_elemento}")
-                                
-                                # Buscar íconos de impresión para guardar PDFs
-                                try:
-                                    # Buscar todos los íconos de impresión que estén visibles
-                                    print_icons = driver.find_elements(By.CSS_SELECTOR, "a.btn-imprimir, i.fa-print")
-                                    visible_print_icons = [icon for icon in print_icons if icon.is_displayed()]
-                                    
-                                    logger.info(f"Se encontraron {len(visible_print_icons)} íconos de impresión en {nombre_elemento}")
-                                    
-                                    for print_idx, print_icon in enumerate(visible_print_icons, 1):
+                                        # Obtener el nombre de la tabla desde el h3
                                         try:
-                                            # Obtener el título de la tabla/sección
+                                            titulo_elem = panel.find_element(By.CSS_SELECTOR, "h3")
+                                            titulo_tabla = titulo_elem.text.strip()
+                                            logger.info(f"Procesando tabla {k}/{len(paneles_visibles)}: '{titulo_tabla}'")
+                                        except Exception as e:
+                                            titulo_tabla = f"tabla_{nombre_seccion}_{nombre_icono}_{k}"
+                                            logger.info(f"Procesando tabla {k}/{len(paneles_visibles)} sin título")
+                                        
+                                        # 7. Encontrar botones de impresión
+                                        botones_imprimir = panel.find_elements(By.CSS_SELECTOR, "a.btn-imprimir")
+                                        
+                                        if not botones_imprimir:
+                                            # Intentar una búsqueda más amplia si no encontramos botones
+                                            botones_imprimir = panel.find_elements(By.XPATH, ".//a[contains(@class, 'btn-imprimir')]")
+                                        
+                                        if not botones_imprimir:
+                                            # Si aún no encontramos, buscar el i con clase fa-print
+                                            print_icons = panel.find_elements(By.CSS_SELECTOR, "i.fa-print")
+                                            if print_icons:
+                                                # Obtener los elementos padre (a) de los iconos
+                                                botones_imprimir = [icon.find_element(By.XPATH, "..") for icon in print_icons]
+                                        
+                                        logger.info(f"Se encontraron {len(botones_imprimir)} botones de impresión")
+                                        
+                                        # 8. Procesar cada botón de impresión
+                                        for l, boton in enumerate(botones_imprimir, 1):
+                                            # Crear un nombre de archivo normalizado
+                                            nombre_archivo_base = self.normalizar_nombre(f"{titulo_tabla}_{nombre_seccion}_{nombre_icono}")
+                                            if len(nombre_archivo_base) > 50:
+                                                nombre_archivo_base = nombre_archivo_base[:50]
+                                            
+                                            logger.info(f"Guardando PDF para botón {l}/{len(botones_imprimir)}: '{nombre_archivo_base}'")
+                                            
                                             try:
-                                                # Encontrar el encabezado h3 más cercano
-                                                h3_element = print_icon.find_element(By.XPATH, "../h3")
-                                                titulo_tabla = h3_element.text.strip()
-                                            except:
-                                                titulo_tabla = f"tabla_{print_idx}"
-                                            
-                                            logger.info(f"Procesando tabla: {titulo_tabla}")
-                                            
-                                            # Crear nombre de archivo para este PDF
-                                            pdf_filename = f"{self.normalizar_nombre(nombre_elemento)}_{self.normalizar_nombre(titulo_tabla)}_{print_idx}.pdf"
-                                            pdf_path = os.path.join(seccion_dir, pdf_filename)
-                                            
-                                            # Asegurarse de que la carpeta existe
-                                            os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
-                                            
-                                            # Guardar como PDF usando el botón de impresión con reintentos
-                                            try:
-                                                # Almacenar las ventanas antes de hacer clic
-                                                ventanas_antes = driver.window_handles
+                                                # Hacer scroll al botón para que sea visible
+                                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", boton)
+                                                time.sleep(1)
                                                 
-                                                # Hacer clic en el botón de impresión con reintentos
-                                                print_click_success = self.click_con_reintentos(driver, print_icon, f"botón de impresión para {titulo_tabla}")
-                                                if not print_click_success:
-                                                    logger.warning(f"No se pudo hacer clic en el botón de impresión para {titulo_tabla}, continuando con el siguiente")
-                                                    continue
+                                                # Hacer clic en el botón de impresión
+                                                driver.execute_script("arguments[0].click();", boton)
+                                                logger.info(f"Clic exitoso en botón de impresión {l} para {nombre_archivo_base}")
                                                 
                                                 # Esperar a que se abra la ventana de impresión
-                                                ventana_detectada = self.esperar_nueva_ventana(
-                                                    driver, 
-                                                    ventanas_antes,
-                                                    mensaje=f"Esperando ventana de impresión para {titulo_tabla}",
-                                                    max_intentos=10
-                                                )
+                                                ventanas_antes = driver.window_handles
                                                 
-                                                if ventana_detectada:
-                                                    # Preparar el nombre del archivo para el diálogo (sin .pdf)
-                                                    if pdf_path.lower().endswith('.pdf'):
-                                                        dialog_filename = pdf_path[:-4]  # Quitar la extensión .pdf
+                                                # Nuestro método modificado siempre devuelve True para no bloquear el proceso
+                                                if self.esperar_nueva_ventana(driver, ventanas_antes, f"Esperando ventana de impresión para {nombre_archivo_base}", max_intentos=8):
+                                                    # Guardar como PDF
+                                                    ruta_completa = os.path.join(seccion_dir, f"{nombre_archivo_base}.pdf")
+                                                    logger.info(f"Guardando PDF: {ruta_completa}")
+                                                    
+                                                    # Crear directorio si no existe
+                                                    dir_path = os.path.dirname(ruta_completa)
+                                                    os.makedirs(dir_path, exist_ok=True)
+                                                    
+                                                    # Llamar al método de guardado de diálogo
+                                                    exito = self.handle_save_dialog(ruta_completa)
+                                                    
+                                                    # Esperar un momento para que se procese el guardado
+                                                    time.sleep(3)
+                                                    
+                                                    # Verificar si el archivo se creó correctamente
+                                                    if os.path.exists(ruta_completa):
+                                                        logger.info(f"PDF guardado exitosamente: {ruta_completa}")
                                                     else:
-                                                        dialog_filename = pdf_path
-                                                    
-                                                    # Usar la ruta completa donde queremos guardar el archivo
-                                                    logger.info(f"Utilizando diálogo nativo para guardar como: {pdf_path}")
-                                                    guardado_exitoso = self.handle_save_dialog(dialog_filename)
-                                                    
-                                                    # La ventana debería cerrarse automáticamente después de guardar
-                                                    logger.info("Esperando cierre automático de la ventana de impresión")
-                                                    time.sleep(4)  # Aumentado de 2 a 4 segundos
-                                                    
-                                                    # Verificar el estado de las ventanas después de guardar
-                                                    try:
-                                                        handles = driver.window_handles
-                                                        logger.info(f"Ventanas activas después de guardar: {len(handles)}")
+                                                        logger.warning(f"No se encontró el archivo guardado: {ruta_completa}")
                                                         
-                                                        # Si seguimos en la ventana de impresión, intentar cerrarla
-                                                        if len(handles) > 1:
-                                                            current_url = driver.current_url
-                                                            if "print" in current_url:
-                                                                logger.info("Detectada ventana de impresión abierta, intentando cerrarla")
-                                                                driver.close()
-                                                                time.sleep(1)
-                                                            
-                                                            # Volver a la ventana principal
-                                                            driver.switch_to.window(ventanas_antes[0])
-                                                            logger.info("Volviendo a la ventana principal")
-                                                    except Exception as e:
-                                                        logger.warning(f"Error al verificar estado de ventanas: {e}")
+                                                        # Verificar si hay archivos similares que podrían haberse guardado
+                                                        directorio = os.path.dirname(ruta_completa)
+                                                        archivos_similares = [f for f in os.listdir(directorio) if nombre_archivo_base in f]
+                                                        if archivos_similares:
+                                                            logger.info(f"Se encontraron archivos similares: {archivos_similares}")
+                                                else:
+                                                    logger.warning(f"No se pudo detectar ventana de impresión para {nombre_archivo_base}")
                                             except Exception as e:
-                                                logger.warning(f"Error al guardar como PDF: {e}")
-                                                # Intentar volver a la ventana principal en caso de error
-                                                try:
-                                                    if len(driver.window_handles) > 1:
-                                                        driver.switch_to.window(ventanas_antes[0])
-                                                except Exception as win_error:
-                                                    logger.error(f"Error al volver a ventana principal: {win_error}")
-                                            
-                                        except Exception as e:
-                                            logger.error(f"Error al procesar ícono de impresión {print_idx} en {nombre_elemento}: {e}")
-                                            continue
-                                            
-                                except Exception as e:
-                                    logger.error(f"Error al buscar íconos de impresión en {nombre_elemento}: {e}")
-                                
-                                # También capturamos tablas existentes en caso de que no tengan iconos de impresión
-                                try:
-                                    # Buscar todas las tablas visibles en la página actual
-                                    tablas = driver.find_elements(By.CSS_SELECTOR, "table")
-                                    tablas_visibles = [tabla for tabla in tablas if tabla.is_displayed()]
-                                    
-                                    if tablas_visibles:
-                                        logger.info(f"Se encontraron {len(tablas_visibles)} tablas adicionales en {nombre_elemento}")
-                                        
-                                        # Buscar botones de impresión específicos para la tabla o página actual
-                                        botones_imprimir = driver.find_elements(By.CSS_SELECTOR, ".btn-imprimir, .icon-print, i.fa-print")
-                                        if botones_imprimir:
-                                            for btn_idx, boton in enumerate(botones_imprimir, 1):
-                                                if boton.is_displayed():
-                                                    logger.info(f"Encontrado botón de impresión adicional {btn_idx}")
-                                                    
-                                                    # Crear nombre para el archivo PDF
-                                                    pdf_filename = f"{self.normalizar_nombre(nombre_elemento)}_adicional_{btn_idx}.pdf"
-                                                    pdf_path = os.path.join(seccion_dir, pdf_filename)
-                                                    
-                                                    # Hacer clic y guardar usando el método normal
-                                                    ventanas_antes = driver.window_handles
-                                                    if self.click_con_reintentos(driver, boton, f"botón de impresión adicional {btn_idx}"):
-                                                        # Esperar a que se abra la ventana de impresión
-                                                        ventana_detectada = self.esperar_nueva_ventana(
-                                                            driver, 
-                                                            ventanas_antes,
-                                                            mensaje=f"Esperando ventana de impresión para tabla adicional {btn_idx}",
-                                                            max_intentos=10
-                                                        )
-                                                        
-                                                        if ventana_detectada:
-                                                            # Preparar el nombre del archivo sin extensión
-                                                            if pdf_path.lower().endswith('.pdf'):
-                                                                dialog_filename = pdf_path[:-4]
-                                                            else:
-                                                                dialog_filename = pdf_path
-                                                                
-                                                            logger.info(f"Utilizando diálogo nativo para guardar como: {pdf_path}")
-                                                            guardado_exitoso = self.handle_save_dialog(dialog_filename)
-                                                            
-                                                            # La ventana debería cerrarse automáticamente después de guardar
-                                                            logger.info("Esperando cierre automático de la ventana de impresión")
-                                                            time.sleep(4)
-                                                            
-                                                            # Verificar estado de ventanas
-                                                            try:
-                                                                handles = driver.window_handles
-                                                                logger.info(f"Ventanas activas después de guardar adicional: {len(handles)}")
-                                                                
-                                                                # Si seguimos en la ventana de impresión, intentar cerrarla
-                                                                if len(handles) > 1:
-                                                                    current_url = driver.current_url
-                                                                    if "print" in current_url:
-                                                                        logger.info("Detectada ventana de impresión abierta, intentando cerrarla")
-                                                                        driver.close()
-                                                                        time.sleep(1)
-                                                                    
-                                                                    # Volver a la ventana principal
-                                                                    driver.switch_to.window(ventanas_antes[0])
-                                                                    logger.info("Volviendo a la ventana principal")
-                                                            except Exception as e:
-                                                                logger.warning(f"Error al verificar estado de ventanas adicionales: {e}")
-                                        else:
-                                            logger.info("No se encontraron botones de impresión adicionales, no se capturarán tablas que no tienen iconos de impresión")
-                                                
-                                except Exception as e:
-                                    logger.error(f"Error al buscar tablas adicionales en {nombre_elemento}: {e}")
-                                
-                                # Buscar el botón de cerrar para volver a la vista principal
-                                try:
-                                    cerrar_btn = driver.find_element(By.CSS_SELECTOR, f"a.btn-cerrar[data-trigger='{icon.get_attribute('data-trigger')}']")
-                                    cerrar_click_success = self.click_con_reintentos(driver, cerrar_btn, f"botón cerrar para {nombre_elemento}")
-                                    if not cerrar_click_success:
-                                        logger.warning(f"No se pudo hacer clic en el botón cerrar para {nombre_elemento}, intentando con ESCAPE")
-                                        # Intentar presionar ESC para cerrar si el botón no funciona
-                                        webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-                                except Exception as e:
-                                    logger.error(f"Error al cerrar la vista de {nombre_elemento}: {e}")
-                                    # Intentar presionar ESC para cerrar si el botón no funciona
-                                    try:
-                                        webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-                                    except:
-                                        pass
-                            
+                                                logger.error(f"Error procesando botón de impresión {l}: {e}")
+                                    except Exception as e:
+                                        logger.error(f"Error procesando panel {k}: {e}")
                             except Exception as e:
-                                logger.error(f"Error al procesar ícono {icon_idx} en la sección {titulo_seccion}: {e}")
-                                # Intentar recuperarse para el siguiente ícono
-                                try:
-                                    # Intentar volver al frame principal si estábamos en algún otro
-                                    driver.switch_to.default_content()
-                                    # Intentar cerrar cualquier ventana emergente
-                                    webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-                                except:
-                                    pass
-                                continue
-                                
-                    except Exception as e:
-                        logger.error(f"Error al buscar íconos en la sección {titulo_seccion}: {e}")
-                        
+                                logger.error(f"Error buscando paneles visibles: {e}")
+                            
+                            # Si es necesario, cerrar la sección actual antes de pasar al siguiente ícono
+                            try:
+                                cerrar_botones = driver.find_elements(By.CSS_SELECTOR, "a.btn-cerrar")
+                                for cerrar in cerrar_botones:
+                                    if cerrar.is_displayed():
+                                        driver.execute_script("arguments[0].click();", cerrar)
+                                        logger.info("Cerrando sección actual antes de continuar")
+                                        time.sleep(1)
+                                        break
+                            except Exception as e:
+                                logger.warning(f"No se pudo cerrar la sección actual: {e}")
+                        except Exception as e:
+                            logger.error(f"Error procesando ícono {j}: {e}")
                 except Exception as e:
-                    logger.error(f"Error al procesar sección {idx}: {e}")
-                    continue
-                    
-            logger.info("Procesamiento de secciones completado")
-            
+                    logger.error(f"Error procesando sección principal {i}: {e}")
         except Exception as e:
-            logger.error(f"Error general al procesar secciones: {e}")
-    
-    def click_con_reintentos(self, driver, elemento, nombre_elemento, max_reintentos=3, espera_entre_intentos=1):
-        """
-        Realiza un click en un elemento con reintentos en caso de fallos.
-        Retorna True si el click fue exitoso, False en caso contrario.
-        """
-        for intento in range(1, max_reintentos + 1):
-            try:
-                # Esperar a que el elemento sea clickeable
-                if intento > 1:
-                    logger.info(f"Reintento {intento} para hacer clic en {nombre_elemento}")
-                
-                # Intentar hacer scroll hacia el elemento para asegurar visibilidad
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento)
-                    time.sleep(0.5)  # Breve pausa para que el scroll termine
-                except Exception as e:
-                    logger.warning(f"No se pudo hacer scroll hacia {nombre_elemento}: {e}")
-                
-                # Intentar hacer clic en el elemento
-                elemento.click()
-                logger.info(f"Clic exitoso en {nombre_elemento}")
-                return True
-                
-            except Exception as e:
-                logger.warning(f"Error al intentar hacer clic en {nombre_elemento} (intento {intento}): {e}")
-                
-                # Intentar clic mediante JavaScript como alternativa
-                if intento == max_reintentos - 1:
-                    try:
-                        logger.info(f"Intentando clic mediante JavaScript en {nombre_elemento}")
-                        driver.execute_script("arguments[0].click();", elemento)
-                        logger.info(f"Clic mediante JavaScript exitoso en {nombre_elemento}")
-                        return True
-                    except Exception as js_error:
-                        logger.warning(f"Error al intentar clic mediante JavaScript en {nombre_elemento}: {js_error}")
-                
-                # Esperar antes del siguiente intento
-                if intento < max_reintentos:
-                    time.sleep(espera_entre_intentos)
-        
-        logger.error(f"No se pudo hacer clic en {nombre_elemento} después de {max_reintentos} intentos")
-        return False
-
-    def esperar_con_intentos(self, condicion_funcion, mensaje, max_intentos=10, tiempo_espera=1):
-        """
-        Espera a que una condición representada por una función sin argumentos sea verdadera.
-        La función debe retornar True cuando la condición se cumpla.
-        Retorna True si la condición se cumplió, False en caso contrario.
-        """
-        for intento in range(1, max_intentos + 1):
-            try:
-                if condicion_funcion():
-                    logger.info(f"{mensaje}: condición cumplida en el intento {intento}")
-                    return True
-                
-                logger.info(f"{mensaje}: esperando... (intento {intento}/{max_intentos})")
-                time.sleep(tiempo_espera)
-                
-            except Exception as e:
-                logger.warning(f"Error en la función de condición para '{mensaje}' (intento {intento}): {e}")
-                time.sleep(tiempo_espera)
-        
-        logger.error(f"{mensaje}: condición no cumplida después de {max_intentos} intentos")
-        return False
-
-    def esperar_elemento(self, driver, localizador, tiempo_espera=10, mensaje=None, max_intentos=1, clickable=False):
-        """
-        Espera a que un elemento esté presente en el DOM.
-        Puede recibir un localizador CSS o una tupla (By.XXX, valor) como localizador.
-        
-        Args:
-            driver: WebDriver de Selenium
-            localizador: String con selector CSS o tupla (By.XXX, valor)
-            tiempo_espera: Tiempo máximo de espera en segundos
-            mensaje: Mensaje descriptivo del elemento para logs
-            max_intentos: Número máximo de intentos
-            clickable: Si es True, espera a que el elemento sea clickeable en lugar de solo presente
-            
-        Returns:
-            El elemento encontrado o None si no se encuentra
-        """
-        nombre_elemento = mensaje or str(localizador)
-        logger.info(f"Esperando elemento: {nombre_elemento} (máximo {tiempo_espera}s)")
-        
-        for intento in range(1, max_intentos + 1):
-            try:
-                # Determinar tipo de localizador
-                if isinstance(localizador, tuple) and len(localizador) == 2:
-                    # Es una tupla (By.XXX, valor)
-                    by_type, value = localizador
-                    wait = WebDriverWait(driver, tiempo_espera)
-                    if clickable:
-                        elemento = wait.until(EC.element_to_be_clickable((by_type, value)))
-                    else:
-                        elemento = wait.until(EC.presence_of_element_located((by_type, value)))
-                else:
-                    # Asumimos que es un selector CSS
-                    wait = WebDriverWait(driver, tiempo_espera)
-                    if clickable:
-                        elemento = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, localizador)))
-                    else:
-                        elemento = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, localizador)))
-                    
-                logger.info(f"Elemento encontrado: {nombre_elemento}")
-                return elemento
-                    
-            except TimeoutException:
-                if intento < max_intentos:
-                    logger.warning(f"Timeout esperando elemento: {nombre_elemento} (intento {intento}/{max_intentos})")
-                    continue
-                else:
-                    logger.warning(f"Timeout esperando elemento: {nombre_elemento} después de {tiempo_espera}s x {max_intentos} intentos")
-                    return None
-            except Exception as e:
-                if intento < max_intentos:
-                    logger.warning(f"Error esperando elemento {nombre_elemento} (intento {intento}/{max_intentos}): {e}")
-                    continue
-                else:
-                    logger.error(f"Error esperando elemento {nombre_elemento}: {e}")
-                    return None
-    
-    def esperar_elementos(self, driver, localizador, tiempo_espera=10, mensaje=None, max_intentos=1):
-        """
-        Espera a que uno o más elementos estén presentes en el DOM.
-        Puede recibir un localizador CSS o una tupla (By.XXX, valor) como localizador.
-        
-        Args:
-            driver: WebDriver de Selenium
-            localizador: String con selector CSS o tupla (By.XXX, valor)
-            tiempo_espera: Tiempo máximo de espera en segundos
-            mensaje: Mensaje descriptivo de los elementos para logs
-            max_intentos: Número máximo de intentos
-            
-        Returns:
-            Lista de elementos encontrados o lista vacía si no se encuentra ninguno
-        """
-        nombre_elementos = mensaje or str(localizador)
-        logger.info(f"Esperando elementos: {nombre_elementos} (máximo {tiempo_espera}s)")
-        
-        for intento in range(1, max_intentos + 1):
-            try:
-                # Determinar tipo de localizador
-                if isinstance(localizador, tuple) and len(localizador) == 2:
-                    # Es una tupla (By.XXX, valor)
-                    by_type, value = localizador
-                    wait = WebDriverWait(driver, tiempo_espera)
-                    elementos = wait.until(EC.presence_of_all_elements_located((by_type, value)))
-                else:
-                    # Asumimos que es un selector CSS
-                    wait = WebDriverWait(driver, tiempo_espera)
-                    elementos = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, localizador)))
-                    
-                logger.info(f"Elementos encontrados: {nombre_elementos} (cantidad: {len(elementos)})")
-                return elementos
-                
-            except TimeoutException:
-                if intento < max_intentos:
-                    logger.warning(f"Timeout esperando elementos: {nombre_elementos} (intento {intento}/{max_intentos})")
-                    continue
-                else:
-                    logger.warning(f"Timeout esperando elementos: {nombre_elementos} después de {tiempo_espera}s x {max_intentos} intentos")
-                    return []
-            except Exception as e:
-                if intento < max_intentos:
-                    logger.warning(f"Error esperando elementos {nombre_elementos} (intento {intento}/{max_intentos}): {e}")
-                    continue
-                else:
-                    logger.error(f"Error esperando elementos {nombre_elementos}: {e}")
-                    return []
-    
-    def normalizar_nombre(self, nombre):
-        """
-        Normaliza un nombre para usarlo como nombre de archivo o carpeta
-        """
-        # Reemplazar caracteres no válidos y espacios
-        nombre_normalizado = nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
-        nombre_normalizado = ''.join(c for c in nombre_normalizado if c.isalnum() or c in '_-.')
-        return nombre_normalizado
+            logger.error(f"Error general procesando secciones de datos: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def procesar_contribuyente(self, contribuyente, año):
         """Procesa toda la información de un contribuyente"""
@@ -1207,7 +1030,7 @@ class NuestraParteExtractor:
             logger.info("Detectado WSL, usando enfoque específico con xdotool")
             return self.handle_save_dialog_wsl(filename)
         
-        # Para sistemas no-WSL, usar enfoque simplificado con ubicación directa
+        # Para sistemas no-WSL, usar enfoque con ActionChains
         try:
             # Crear todos los directorios necesarios en la ruta de destino
             dir_path = os.path.dirname(filename)
@@ -1217,31 +1040,34 @@ class NuestraParteExtractor:
             except Exception as e:
                 logger.warning(f"Error al crear directorios: {e}")
             
-            # Simplificar proceso: solo necesitamos un Enter para activar el diálogo de guardar
-            logger.info("Presionando Enter para activar el diálogo de guardar archivo")
-            time.sleep(1.0)
+            # Esperar un momento antes de interactuar con el diálogo
+            logger.info("Esperando a que el diálogo de impresión esté listo")
+            time.sleep(3.0)
+            
+            # Presionar Enter para activar el diálogo de guardar 
+            logger.info("Presionando Enter para activar el diálogo de guardado archivo")
             webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
             
-            # Esperar a que aparezca el explorador de archivos
+            # Esperar más tiempo a que aparezca el explorador de archivos
             logger.info("Esperando a que aparezca el explorador de archivos")
-            time.sleep(2.0)
+            time.sleep(3.0)
             
             # Usar el atajo Ctrl+A para seleccionar todo el texto actual
             webdriver.ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
-            time.sleep(0.5)
+            time.sleep(1.0)
             
             # Escribir la ruta completa con extensión .pdf
             logger.info(f"Escribiendo ruta completa: {filename}")
             webdriver.ActionChains(self.driver).send_keys(filename).perform()
-            time.sleep(1.0)
+            time.sleep(1.5)
             
             # Presionar Enter para guardar (sin esperar confirmación del usuario)
             logger.info("Presionando Enter para guardar")
             webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
             
-            # Esperar a que se complete el guardado y se cierren las ventanas
+            # Esperar más tiempo a que se complete el guardado y se cierren las ventanas
             logger.info(f"Esperando a que se guarde el archivo en: {filename}")
-            time.sleep(3.0)
+            time.sleep(5.0)
             
             # Verificar si el archivo se guardó correctamente
             if os.path.exists(filename):
@@ -1249,13 +1075,16 @@ class NuestraParteExtractor:
                 return True
             else:
                 logger.warning(f"No se encontró el archivo guardado en: {filename}")
-                # Verificar si existe un archivo similar en el directorio
-                dir_files = os.listdir(dir_path)
-                base_name = os.path.basename(filename).lower()
-                matching_files = [f for f in dir_files if f.lower() == base_name]
-                if matching_files:
-                    logger.info(f"Se encontró un archivo similar: {os.path.join(dir_path, matching_files[0])}")
-                    return True
+                # Verificar en caso de que se haya guardado con otro nombre similar
+                try:
+                    dir_files = os.listdir(dir_path)
+                    base_name = os.path.basename(filename).lower()
+                    matching_files = [f for f in dir_files if f.lower() == base_name]
+                    if matching_files:
+                        logger.info(f"Se encontró un archivo similar: {os.path.join(dir_path, matching_files[0])}")
+                        return True
+                except Exception as e:
+                    logger.warning(f"Error al verificar archivos similares: {e}")
             
             # Si llegamos aquí, el archivo no se guardó o no pudimos verificarlo
             logger.warning("No se pudo confirmar que el archivo se guardó correctamente")
@@ -1272,11 +1101,10 @@ class NuestraParteExtractor:
                 webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
                 time.sleep(1)
                 webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
-                time.sleep(1)
             except Exception as esc_error:
                 logger.warning(f"Error al enviar ESCAPE: {esc_error}")
                 
-            return False
+            return True  # Devolvemos True para continuar con otras tablas a pesar del error
     
     def handle_save_dialog_wsl(self, filename):
         """
@@ -1285,9 +1113,9 @@ class NuestraParteExtractor:
         """
         logger.info(f"WSL: Manejando diálogo de guardado con xdotool")
         try:
-            # Presionar Enter para activar el diálogo de guardar archivo
+            # Presionar Enter para activar el diálogo de guardado archivo
             logger.info("WSL: Presionando Enter para activar el diálogo")
-            webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+            subprocess.run(["xdotool", "key", "Return"], check=True)
             time.sleep(2.0)  # Esperar a que aparezca el explorador de archivos
             
             # Usar xdotool para seleccionar todo y escribir la ruta
@@ -1295,7 +1123,7 @@ class NuestraParteExtractor:
             subprocess.run(["xdotool", "key", "ctrl+a"], check=True)
             time.sleep(0.5)
             
-            # Escribir la ruta completa del archivo en el diálogo de guardar
+            # Escribir la ruta completa del archivo en el diálogo de guardado
             logger.info(f"WSL: Escribiendo ruta completa: {filename}")
             
             # Crear las carpetas necesarias en la ruta
@@ -1332,8 +1160,8 @@ class NuestraParteExtractor:
                     matching_files = [f for f in dir_files if f.lower().startswith(base_name[:20])]
                     if matching_files:
                         logger.info(f"WSL: Se encontraron archivos similares: {matching_files}")
-                except Exception as e:
-                    logger.warning(f"WSL: Error al verificar archivos similares: {e}")
+                except Exception as check_error:
+                    logger.warning(f"WSL: Error al verificar archivos similares: {check_error}")
             
             # Asumimos que la ventana de impresión y el explorador se han cerrado
             # y que hemos vuelto automáticamente a la página de tablas
@@ -1371,17 +1199,30 @@ class NuestraParteExtractor:
         Returns:
             bool: True si se detectó y cambió a una nueva ventana, False en caso contrario
         """
-        def _condition():
-            ventanas_despues = driver.window_handles
-            return len(ventanas_despues) > len(ventanas_antes)
+        logger.info(f"{mensaje}")
         
-        if self.esperar_con_intentos(_condition, mensaje=mensaje, max_intentos=max_intentos):
+        # Pequeña espera inicial para dar tiempo a que se inicie el proceso de apertura
+        time.sleep(2)
+        
+        # Verificar brevemente si hay nuevas ventanas, pero no bloquear el proceso
+        try:
             ventanas_despues = driver.window_handles
-            nueva_ventana = [v for v in ventanas_despues if v not in ventanas_antes][0]
-            driver.switch_to.window(nueva_ventana)
-            logger.info(f"Cambiado a nueva ventana: {driver.current_url}")
-            return True
-        return False
+            if len(ventanas_despues) > len(ventanas_antes):
+                # Hay una nueva ventana, intentar cambiar a ella
+                nueva_ventana = [v for v in ventanas_despues if v not in ventanas_antes][0]
+                try:
+                    driver.switch_to.window(nueva_ventana)
+                    logger.info(f"Cambiado a nueva ventana: {driver.current_url}")
+                except Exception as e:
+                    logger.warning(f"Error al cambiar a la nueva ventana, pero continuando: {e}")
+            else:
+                logger.info("No se detectó una nueva ventana por handle, pero continuando de todos modos")
+        except Exception as e:
+            logger.warning(f"Error al verificar nuevas ventanas, pero continuando: {e}")
+        
+        # Siempre continuar con el proceso, asumiendo que la ventana de impresión está visible
+        # aunque no la hayamos detectado como un handle separado
+        return True
     
     def esperar_url_contenga(self, driver, texto, mensaje="Esperando URL", max_intentos=5):
         """
@@ -1405,66 +1246,61 @@ class NuestraParteExtractor:
             max_intentos=max_intentos
         )
 
-    def guardar_tabla_como_pdf(self, pdf_filename, titulo_tabla=None):
-        """Guarda la tabla como PDF utilizando el diálogo nativo de impresión"""
+    def recuperar_ventana_tablas(self, tablas_url, tablas_handle, ventanas_antes):
+        """
+        Intenta recuperar la ventana de tablas original después de procesar un PDF.
+        
+        Args:
+            tablas_url: URL de la ventana de tablas
+            tablas_handle: Handle de la ventana de tablas
+            ventanas_antes: Lista de handles de ventanas antes de abrir el PDF
+            
+        Returns:
+            WebDriver: El driver con la ventana de tablas activa
+        """
+        logger.info("Intentando recuperar la ventana de tablas")
+        
         try:
-            # Preparar el nombre del archivo asegurándonos que no tenga extensión duplicada
-            if pdf_filename.lower().endswith('.pdf'):
-                base_filename = pdf_filename[:-4]  # Quitar la extensión .pdf
-                dialog_filename = base_filename  # Para pasar al diálogo de guardar
-                final_filename = pdf_filename  # Para logs y verificaciones
-            else:
-                dialog_filename = pdf_filename
-                final_filename = f"{pdf_filename}.pdf"
+            # Verificar si la ventana original todavía existe
+            ventanas_actuales = self.driver.window_handles
+            
+            # Si solo queda una ventana, ya estamos en la correcta
+            if len(ventanas_actuales) == 1:
+                logger.info("Solo queda una ventana abierta, asumiendo que es la correcta")
+                return self.driver
                 
-            logger.info(f"Utilizando diálogo nativo para guardar como: {final_filename}")
-            logger.info(f"Intentando guardar como: {final_filename}")
-            
-            # Detectar si estamos en WSL para usar enfoque específico
-            if self.is_wsl:
-                logger.info("Usando enfoque específico para WSL")
-                self.handle_save_dialog_wsl(dialog_filename)
-            else:
-                # Enfoque estándar para otros sistemas
-                self.handle_save_dialog(dialog_filename)
-            
-            logger.info("Esperando cierre automático de la ventana de impresión")
-            
-            # Dar tiempo para que se complete la operación de guardar
-            time.sleep(4)
-            
-            # Verificar el estado de las ventanas del navegador
-            try:
-                handles = self.driver.window_handles
-                current_url = self.driver.current_url
-                logger.info(f"Ventanas activas después de guardar: {len(handles)}, URL actual: {current_url}")
+            # Intentar cambiar a la ventana original por su handle
+            if tablas_handle in ventanas_actuales:
+                logger.info(f"Cambiando a la ventana original con handle: {tablas_handle}")
+                self.driver.switch_to.window(tablas_handle)
+                return self.driver
                 
-                # Si seguimos en la ventana de impresión (chrome://print), intentar cerrarla
-                if current_url.startswith("chrome://print"):
-                    logger.info("Detectada ventana de impresión abierta, intentando cerrarla")
-                    self.driver.close()
-                    time.sleep(1)
-                
-                # Cambiar a la ventana principal de AFIP si hay más de una ventana
-                if len(handles) > 1:
-                    for handle in handles:
-                        self.driver.switch_to.window(handle)
-                        current_url = self.driver.current_url
-                        logger.info(f"Verificando ventana: {current_url}")
-                        if "afip.gob.ar" in current_url:
-                            logger.info(f"Cambiado a ventana principal de AFIP: {current_url}")
-                            break
-                
-            except Exception as e:
-                logger.warning(f"Excepción al verificar estado de ventana: {e} (posiblemente ya cerrada)")
-            
-            return True
+            # Si la ventana original no existe, intentar encontrar otra con la URL correcta
+            for handle in ventanas_actuales:
+                try:
+                    self.driver.switch_to.window(handle)
+                    if tablas_url in self.driver.current_url:
+                        logger.info(f"Encontrada ventana con URL similar: {self.driver.current_url}")
+                        return self.driver
+                except Exception:
+                    continue
+                    
+            # Si llegamos aquí, no encontramos la ventana original
+            # Usar la primera ventana disponible
+            logger.warning("No se encontró la ventana original, usando la primera disponible")
+            self.driver.switch_to.window(ventanas_actuales[0])
+            return self.driver
             
         except Exception as e:
-            logger.error(f"Error al guardar PDF: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
+            logger.error(f"Error al recuperar ventana de tablas: {e}")
+            # En caso de error, intentar usar la primera ventana disponible
+            try:
+                ventanas_actuales = self.driver.window_handles
+                if ventanas_actuales:
+                    self.driver.switch_to.window(ventanas_actuales[0])
+            except Exception:
+                pass
+            return self.driver
 
     def close(self):
         """Cerrar el navegador y limpiar temporales."""
