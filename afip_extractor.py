@@ -659,6 +659,9 @@ class NuestraParteExtractor:
         logger.info("Esperando brevemente a que la página cargue los elementos básicos...")
         time.sleep(2)
         
+        # Conjunto para almacenar todas las rutas de archivos guardados y evitar duplicados
+        archivos_guardados = set()
+        
         try:
             # 1. Encontrar todas las secciones principales usando la estructura del DOM
             secciones_principales = driver.find_elements(By.CSS_SELECTOR, "div.div-container-grey.row")
@@ -758,7 +761,7 @@ class NuestraParteExtractor:
                                             titulo_tabla = titulo_elem.text.strip()
                                             logger.info(f"Procesando tabla {k}/{len(paneles_visibles)}: '{titulo_tabla}'")
                                         except Exception as e:
-                                            titulo_tabla = f"tabla_{nombre_seccion}_{nombre_icono}_{k}"
+                                            titulo_tabla = f"tabla_{k}"
                                             logger.info(f"Procesando tabla {k}/{len(paneles_visibles)} sin título")
                                         
                                         # 7. Encontrar botones de impresión
@@ -779,10 +782,25 @@ class NuestraParteExtractor:
                                         
                                         # 8. Procesar cada botón de impresión
                                         for l, boton in enumerate(botones_imprimir, 1):
-                                            # Crear un nombre de archivo normalizado
-                                            nombre_archivo_base = self.normalizar_nombre(f"{titulo_tabla}_{nombre_seccion}_{nombre_icono}")
-                                            if len(nombre_archivo_base) > 50:
-                                                nombre_archivo_base = nombre_archivo_base[:50]
+                                            # Simplificar el nombre del archivo: Título de la tabla + nombre del ícono
+                                            # Ya no incluimos el nombre de la sección principal porque ya está en el directorio
+                                            nombre_archivo_base = self.normalizar_nombre(f"{titulo_tabla}_{nombre_icono}")
+                                            if len(nombre_archivo_base) > 80:  # Permitir nombres más largos pero no excesivos
+                                                nombre_archivo_base = nombre_archivo_base[:80]
+                                            
+                                            # Ruta completa del archivo
+                                            ruta_completa = os.path.join(seccion_dir, f"{nombre_archivo_base}.pdf")
+                                            
+                                            # Verificar si este archivo ya fue guardado previamente (evitar duplicados)
+                                            if ruta_completa in archivos_guardados:
+                                                logger.info(f"Ignorando archivo duplicado: {nombre_archivo_base}")
+                                                continue
+                                            
+                                            # También verificar si el archivo ya existe en disco (puede haber sido guardado en sesiones anteriores)
+                                            if os.path.exists(ruta_completa):
+                                                logger.info(f"El archivo ya existe en disco, agregando a registro: {nombre_archivo_base}")
+                                                archivos_guardados.add(ruta_completa)
+                                                continue
                                             
                                             logger.info(f"Guardando PDF para botón {l}/{len(botones_imprimir)}: '{nombre_archivo_base}'")
                                             
@@ -801,7 +819,6 @@ class NuestraParteExtractor:
                                                 # Nuestro método modificado siempre devuelve True para no bloquear el proceso
                                                 if self.esperar_nueva_ventana(driver, ventanas_antes, f"Esperando ventana de impresión para {nombre_archivo_base}", max_intentos=8):
                                                     # Guardar como PDF
-                                                    ruta_completa = os.path.join(seccion_dir, f"{nombre_archivo_base}.pdf")
                                                     logger.info(f"Guardando PDF: {ruta_completa}")
                                                     
                                                     # Crear directorio si no existe
@@ -817,6 +834,8 @@ class NuestraParteExtractor:
                                                     # Verificar si el archivo se creó correctamente
                                                     if os.path.exists(ruta_completa):
                                                         logger.info(f"PDF guardado exitosamente: {ruta_completa}")
+                                                        # Agregar al conjunto de archivos guardados
+                                                        archivos_guardados.add(ruta_completa)
                                                     else:
                                                         logger.warning(f"No se encontró el archivo guardado: {ruta_completa}")
                                                         
@@ -824,7 +843,10 @@ class NuestraParteExtractor:
                                                         directorio = os.path.dirname(ruta_completa)
                                                         archivos_similares = [f for f in os.listdir(directorio) if nombre_archivo_base in f]
                                                         if archivos_similares:
-                                                            logger.info(f"Se encontraron archivos similares: {archivos_similares}")
+                                                            archivo_similar = os.path.join(directorio, archivos_similares[0])
+                                                            logger.info(f"Se encontró un archivo similar: {archivo_similar}")
+                                                            # Agregar el archivo similar al conjunto
+                                                            archivos_guardados.add(archivo_similar)
                                                 else:
                                                     logger.warning(f"No se pudo detectar ventana de impresión para {nombre_archivo_base}")
                                             except Exception as e:
@@ -849,6 +871,9 @@ class NuestraParteExtractor:
                             logger.error(f"Error procesando ícono {j}: {e}")
                 except Exception as e:
                     logger.error(f"Error procesando sección principal {i}: {e}")
+                    
+            # Al finalizar, mostrar resumen de archivos guardados
+            logger.info(f"Total de archivos únicos guardados: {len(archivos_guardados)}")
         except Exception as e:
             logger.error(f"Error general procesando secciones de datos: {e}")
             import traceback
