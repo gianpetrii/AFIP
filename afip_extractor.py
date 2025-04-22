@@ -51,14 +51,35 @@ except Exception as e:
     print("El programa funcionará sin la capacidad de manejar diálogos nativos.")
 
 # Configuración de logging
+# Asegurar que la carpeta de logs exista
+os.makedirs("logs", exist_ok=True)
+
+# Configurar el formato para los logs
+formato_detallado = '%(asctime)s - %(levelname)s - %(message)s'
+formato_simple = '%(asctime)s - %(message)s'
+
+# Obtener la fecha actual para el nombre del archivo de log
+fecha_actual = datetime.now().strftime("%Y%m%d")
+archivo_log_tecnico = "afip_extractor.log"
+archivo_log_usuario = os.path.join("logs", f"afip_extractor_{fecha_actual}.log")
+
+# Configurar logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format=formato_detallado,
     handlers=[
-        logging.FileHandler("afip_extractor.log"),
-        logging.StreamHandler()
+        logging.FileHandler(archivo_log_tecnico),  # Log técnico detallado
+        logging.StreamHandler()  # Salida a consola
     ]
 )
+
+# Crear un logger adicional para el usuario con formato más simple
+logger_usuario = logging.getLogger("AFIP_Extractor")
+logger_usuario.setLevel(logging.INFO)
+handler_usuario = logging.FileHandler(archivo_log_usuario)
+handler_usuario.setFormatter(logging.Formatter(formato_simple))
+logger_usuario.addHandler(handler_usuario)
+
 logger = logging.getLogger("AFIP Extractor")
 
 # Definición de una excepción para el timeout
@@ -127,11 +148,6 @@ class NuestraParteExtractor:
             self.desktop_dir = next((d for d in desktop_candidates if os.path.exists(d)), 
                                     os.path.expanduser('~'))  # Usar home como fallback
         
-        # Crear un directorio temporal para descargas en el escritorio
-        self.download_dir = os.path.join("/tmp", "AFIP_temp_downloads")
-        os.makedirs(self.download_dir, exist_ok=True)
-        logger.info(f"Directorio de descargas configurado en: {self.download_dir}")
-        
     def setup_driver(self):
         """
         Configura y devuelve el driver de Chrome con opciones optimizadas.
@@ -143,12 +159,8 @@ class NuestraParteExtractor:
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         
-        # Configuración para manejar PDFs
-        os.makedirs(self.download_dir, exist_ok=True)
-        
         # Habilitar guardado de PDF directamente
         prefs = {
-            "download.default_directory": self.download_dir,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
             "plugins.always_open_pdf_externally": True,  # No abrir PDF en Chrome
@@ -186,14 +198,20 @@ class NuestraParteExtractor:
             logger.error(f"Error al iniciar Chrome: {e}")
             raise
     
-    def crear_estructura_carpetas(self):
+    def crear_estructura_carpetas(self, ruta=None):
         """
-        Crea la carpeta principal donde se guardarán los resultados.
+        Crea la carpeta especificada donde se guardarán los resultados.
         
+        Args:
+            ruta (str, optional): Ruta de la carpeta a crear. Por defecto, la carpeta principal de resultados.
+            
         Returns:
             bool: True si se creó exitosamente, False en caso contrario
         """
-        return crear_estructura_carpetas(self.output_folder)
+        if ruta is None:
+            ruta = self.output_folder
+        
+        return crear_estructura_carpetas(ruta)
     
     def leer_contribuyentes(self, csv_file="clientes.csv"):
         """
@@ -201,7 +219,7 @@ class NuestraParteExtractor:
         
         Args:
             csv_file (str): Ruta al archivo CSV con los datos de los contribuyentes
-            
+        
         Returns:
             list: Lista de diccionarios con información de contribuyentes
         """
@@ -518,10 +536,6 @@ class NuestraParteExtractor:
             bool: True si el proceso fue exitoso, False en caso contrario
         """
         try:
-            # Crear directorio de salida para este cuit si no existe
-            contribuyente_dir = os.path.join(output_dir, cuit)
-            crear_estructura_carpetas(contribuyente_dir)
-            
             # Verificar que estamos en la página correcta
             current_url = driver.current_url
             valid_fragments = ["serviciosjava2.afip.gob.ar/cgpf", "nuestra-parte", "nuestraparte"]
@@ -626,12 +640,8 @@ class NuestraParteExtractor:
             if not año_encontrado:
                 logger.warning(f"No se pudo encontrar/seleccionar el año {año}, continuando con lo que esté disponible")
             
-            # Crear directorio para este año (sin prefijo "año_")
-            año_dir = os.path.join(contribuyente_dir, str(año))
-            crear_estructura_carpetas(año_dir)
-            
             # Procesar secciones de datos
-            self.procesar_secciones_datos(driver, año_dir)
+            self.procesar_secciones_datos(driver, output_dir)
             
             return True
             
@@ -777,9 +787,9 @@ class NuestraParteExtractor:
                                         
                                         # 8. Procesar cada botón de impresión
                                         for l, boton in enumerate(botones_imprimir, 1):
-                                            # Simplificar el nombre del archivo: Título de la tabla + nombre del ícono
-                                            # Ya no incluimos el nombre de la sección principal porque ya está en el directorio
-                                            nombre_archivo_base = self.normalizar_nombre(f"{titulo_tabla}_{nombre_icono}")
+                                            # Usar sólo el título de la tabla como nombre del archivo
+                                            # sin incluir el nombre del ícono para simplificar los nombres
+                                            nombre_archivo_base = self.normalizar_nombre(titulo_tabla)
                                             
                                             # Ruta completa del archivo
                                             ruta_completa = os.path.join(seccion_dir, f"{nombre_archivo_base}.pdf")
@@ -892,13 +902,15 @@ class NuestraParteExtractor:
         logger.info(f"Procesando contribuyente: {nombre}")
         print(f"\nProcesando contribuyente: {nombre} (CUIT: {cuit})")
         
-        # Crear carpeta para el contribuyente
-        path_contribuyente = os.path.join(self.output_folder, nombre)
+        # Crear carpeta para el contribuyente dentro de la carpeta del año
+        año_dir = os.path.join(self.output_folder, str(año))
+        path_contribuyente = os.path.join(año_dir, nombre)
         try:
             crear_estructura_carpetas(path_contribuyente)
             logger.info(f"Carpeta creada para contribuyente: {path_contribuyente}")
         except Exception as e:
             logger.error(f"Error al crear carpeta para {nombre}: {e}")
+            logger_usuario.info(f"No se pudo crear la carpeta para {nombre}. Error: {e}")
             print(f"Error al crear carpeta para {nombre}. Continuando con el siguiente contribuyente...")
             return False
         
@@ -933,6 +945,7 @@ class NuestraParteExtractor:
             
             # Iniciar el procesamiento normal
             driver = self.setup_driver()
+            logger_usuario.info(f"Navegador iniciado para procesar {nombre}")
             
             # Verificar periódicamente si se ha excedido el tiempo
             def check_timeout():
@@ -941,28 +954,34 @@ class NuestraParteExtractor:
             
             # Iniciar sesión
             check_timeout()  # Verificar timeout antes de cada paso importante
+            logger_usuario.info(f"Iniciando sesión para {nombre} (CUIT: {cuit})")
             if not self.iniciar_sesion(driver, cuit, clave_fiscal):
                 with open(os.path.join(path_contribuyente, "error_login.txt"), "w") as f:
                     f.write("Error al intentar iniciar sesión. Verifique las credenciales.")
                 logger.error(f"Error al iniciar sesión para {nombre}")
+                logger_usuario.info(f"Error al iniciar sesión para {nombre}. Verifique las credenciales (CUIT y clave fiscal).")
                 print(f"Error al iniciar sesión para {nombre}. Continuando con el siguiente contribuyente...")
                 return False
             
             # Procesar Nuestra Parte
             check_timeout()  # Verificar timeout antes de procesar
+            logger_usuario.info(f"Accediendo a la información del año {año} para {nombre}")
             resultado = self.procesar_nuestra_parte(driver, cuit, año, path_contribuyente)
             
             if resultado:
                 logger.info(f"Procesamiento de {nombre} completado exitosamente")
+                logger_usuario.info(f"Información fiscal del año {año} procesada exitosamente para {nombre}")
                 print(f"Procesamiento de {nombre} completado exitosamente")
                 return True
             else:
                 logger.warning(f"No se pudo procesar Nuestra Parte para {nombre}")
+                logger_usuario.info(f"No se pudo obtener la información fiscal del año {año} para {nombre}")
                 print(f"No se pudo procesar Nuestra Parte para {nombre}. Continuando con el siguiente contribuyente...")
                 return False
                 
         except ContribuyenteTimeoutError:
             logger.error(f"Timeout: Se excedió el tiempo máximo de {self.contribuyente_timeout}s para procesar {nombre}")
+            logger_usuario.info(f"Se excedió el tiempo máximo de procesamiento para {nombre}. El proceso se interrumpió por seguridad.")
             print(f"Timeout: Se excedió el tiempo máximo al procesar {nombre}. Continuando con el siguiente contribuyente...")
             # Crear archivo indicando el error de timeout
             with open(os.path.join(path_contribuyente, "error_timeout.txt"), "w") as f:
@@ -970,6 +989,7 @@ class NuestraParteExtractor:
             return False
         except Exception as e:
             logger.error(f"Error general procesando {nombre}: {e}")
+            logger_usuario.info(f"Error inesperado al procesar {nombre}: {e}")
             print(f"Error procesando {nombre}: {e}. Continuando con el siguiente contribuyente...")
             return False
         finally:
@@ -985,67 +1005,111 @@ class NuestraParteExtractor:
                 except Exception as e:
                     logger.warning(f"Error al cerrar el navegador: {e}")
     
-    def verificar_carpeta_resultados(self):
+    def verificar_carpeta_resultados(self, año):
         """
-        Verifica si la carpeta de resultados ya existe y pregunta al usuario si desea eliminarla.
+        Verifica si la carpeta del año específico ya existe y pregunta al usuario si desea eliminarla.
+        
+        Args:
+            año (str): El año seleccionado para procesar
         
         Returns:
             bool: True si se puede continuar con la ejecución, False si el usuario decide no eliminar la carpeta
         """
-        if os.path.exists(self.output_folder):
-            print(f"\nATENCIÓN: La carpeta de resultados ya existe: {self.output_folder}")
-            respuesta = input("¿Desea eliminarla y continuar? (s/n): ").strip().lower()
+        # Crear la carpeta principal de resultados si no existe
+        if not os.path.exists(self.output_folder):
+            try:
+                os.makedirs(self.output_folder)
+                logger.info(f"Carpeta principal de resultados creada: {self.output_folder}")
+            except Exception as e:
+                logger.error(f"Error al crear la carpeta principal de resultados: {e}")
+                print(f"Error al crear la carpeta de resultados: {e}")
+                return False
+                
+        # Verificar si existe la carpeta del año específico
+        año_dir = os.path.join(self.output_folder, str(año))
+        if os.path.exists(año_dir):
+            print(f"\nATENCIÓN: Ya existen resultados para el año {año} en: {año_dir}")
+            respuesta = input("¿Desea eliminar estos resultados y continuar? (s/n): ").strip().lower()
             
             if respuesta == 's' or respuesta == 'si' or respuesta == 'y' or respuesta == 'yes':
                 try:
                     import shutil
-                    shutil.rmtree(self.output_folder)
-                    logger.info(f"Carpeta de resultados eliminada: {self.output_folder}")
+                    shutil.rmtree(año_dir)
+                    logger.info(f"Carpeta de resultados del año {año} eliminada: {año_dir}")
                     print(f"Carpeta eliminada. Continuando...")
                     return True
                 except Exception as e:
-                    logger.error(f"Error al eliminar la carpeta de resultados: {e}")
+                    logger.error(f"Error al eliminar la carpeta de resultados del año {año}: {e}")
                     print(f"Error al eliminar la carpeta. Continuando de todos modos...")
                     return True
             else:
-                logger.info("El usuario decidió no eliminar la carpeta de resultados. Terminando ejecución.")
+                logger.info(f"El usuario decidió no eliminar la carpeta de resultados del año {año}. Terminando ejecución.")
                 print("Operación cancelada por el usuario.")
                 return False
         
         return True
-
+    
     def ejecutar(self, año=None, csv_file="clientes.csv"):
         """Función principal que inicia todo el proceso"""
         try:
             # Mostrar banner e instrucciones
             self.mostrar_banner()
             
-            # Verificar la carpeta de resultados
-            if not self.verificar_carpeta_resultados():
-                return
-                
+            # Mensaje inicial para el usuario
+            logger_usuario.info("=== INICIANDO EXTRACTOR DE INFORMACIÓN FISCAL DE AFIP ===")
+            logger_usuario.info(f"Fecha y hora de inicio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+            
             # Solicitar año a evaluar si no se proporcionó
             if año is None:
                 año = self.solicitar_año()
                 
-            # Crear estructura de carpetas
-            self.crear_estructura_carpetas()
+            logger_usuario.info(f"Se procesará el año fiscal: {año}")
+            
+            # Verificar la carpeta de resultados del año específico
+            if not self.verificar_carpeta_resultados(año):
+                logger_usuario.info("Operación cancelada por el usuario. No se realizará la extracción.")
+                return
+            
+            # Crear estructura de carpetas para el año
+            año_dir = os.path.join(self.output_folder, str(año))
+            crear_estructura_carpetas(año_dir)
+            logger_usuario.info(f"Carpeta de resultados para el año {año}: {año_dir}")
             
             # Verificar que el archivo CSV existe
-            self.verificar_archivo_clientes(csv_file)
+            try:
+                self.verificar_archivo_clientes(csv_file)
+                logger_usuario.info(f"Usando archivo de contribuyentes: {csv_file}")
+            except Exception as e:
+                logger_usuario.info(f"Error al cargar archivo de contribuyentes. Asegúrese de que '{csv_file}' exista y tenga formato CSV válido.")
+                print(f"\nError: No se pudo cargar el archivo de contribuyentes '{csv_file}'.")
+                print("Asegúrese de que el archivo exista y tenga formato CSV válido con las columnas: nombre,cuit,clave_fiscal")
+                print("Se ha creado un archivo de ejemplo que puede usar como referencia.")
+                return
             
             # Leer contribuyentes
-            contribuyentes = self.leer_contribuyentes(csv_file)
+            try:
+                contribuyentes = self.leer_contribuyentes(csv_file)
+                logger_usuario.info(f"Se encontraron {len(contribuyentes)} contribuyentes para procesar")
+            except Exception as e:
+                logger_usuario.info(f"Error al leer contribuyentes: {e}")
+                print(f"\nError al leer contribuyentes: {e}")
+                print("Verifique que el archivo CSV tenga el formato correcto.")
+                return
             
             # Procesar contribuyentes
             contribuyentes_procesados = 0
             contribuyentes_fallidos = 0
             
             for i, contribuyente in enumerate(contribuyentes, 1):
+                nombre = contribuyente["nombre"]
+                logger_usuario.info(f"Procesando contribuyente {i}/{len(contribuyentes)}: {nombre}")
+                
                 if self.procesar_contribuyente(contribuyente, año):
                     contribuyentes_procesados += 1
+                    logger_usuario.info(f"✅ Contribuyente {nombre} procesado exitosamente")
                 else:
                     contribuyentes_fallidos += 1
+                    logger_usuario.info(f"❌ Error al procesar contribuyente {nombre}")
                     
                 # Mostrar progreso
                 print(f"Contribuyente {i}/{len(contribuyentes)} procesado: {contribuyente['nombre']}")
@@ -1056,20 +1120,31 @@ class NuestraParteExtractor:
             logger.info(f"Contribuyentes con errores: {contribuyentes_fallidos}")
             logger.info("=============================")
             
+            # Registrar resumen en el log del usuario
+            logger_usuario.info("")
+            logger_usuario.info("==== RESUMEN DE LA EXTRACCIÓN ====")
+            logger_usuario.info(f"Total de contribuyentes: {len(contribuyentes)}")
+            logger_usuario.info(f"Contribuyentes procesados exitosamente: {contribuyentes_procesados}")
+            logger_usuario.info(f"Contribuyentes con errores: {contribuyentes_fallidos}")
+            logger_usuario.info(f"Carpeta con los resultados: {os.path.join(self.output_folder, str(año))}")
+            logger_usuario.info("=================================")
+            
             print("\n\n====================================")
             print(f"EXTRACCIÓN FINALIZADA:")
             print(f"- Contribuyentes procesados: {contribuyentes_procesados}")
             print(f"- Contribuyentes con errores: {contribuyentes_fallidos}")
             print("====================================")
-            print(f"Los resultados se encuentran en la carpeta: {self.output_folder}")
+            print(f"Los resultados se encuentran en la carpeta: {os.path.join(self.output_folder, str(año))}")
+            print(f"El registro de la operación se encuentra en: {archivo_log_usuario}")
             print("====================================\n")
             
             input("Presione ENTER para finalizar...")
             
         except Exception as e:
             logger.error(f"Error general en la ejecución: {e}")
+            logger_usuario.info(f"❌ Error inesperado durante la ejecución: {e}")
             print(f"\nError inesperado: {e}")
-            print("Se ha generado un archivo de log con los detalles.")
+            print(f"Se ha generado un archivo de log con los detalles en: {archivo_log_usuario}")
             input("\nPresione ENTER para salir...")
     
     def solicitar_año(self):
@@ -1097,7 +1172,8 @@ class NuestraParteExtractor:
         print(banner)
         print("INSTRUCCIONES:")
         print("1. Prepare un archivo CSV llamado 'clientes.csv' con las columnas: nombre,cuit,clave_fiscal")
-        print("2. Asegúrese de que el archivo contenga los datos correctos de cada contribuyente")
+        print("2. El archivo debe tener formato CSV válido con los datos separados por comas")
+        print("3. Asegúrese de que el archivo contenga los datos correctos de cada contribuyente")
         print("\nIMPORTANTE: Este programa extrae información de la sección 'Nuestra Parte' de AFIP")
         print("=======================================================================\n")
 
@@ -1117,6 +1193,7 @@ class NuestraParteExtractor:
             if CSVHandler.crear_csv_ejemplo(ejemplo_csv):
                 print(f"Se creó un archivo de ejemplo en {ejemplo_csv}")
                 print("Por favor, edite este archivo con sus datos y renómbrelo a 'clientes.csv'")
+                print("Asegúrese de mantener el formato CSV correcto (valores separados por comas)")
             
             raise
         except Exception as e:
@@ -1426,20 +1503,7 @@ class NuestraParteExtractor:
                 logger.info("Navegador cerrado correctamente")
             except Exception as e:
                 logger.warning(f"Error al cerrar el navegador: {e}")
-        
-        # Limpiar directorio temporal de descargas
-        self.cleanup_temp_dir()
-        
-    def cleanup_temp_dir(self):
-        """Eliminar el directorio temporal de descargas."""
-        try:
-            if os.path.exists(self.download_dir):
-                import shutil
-                shutil.rmtree(self.download_dir)
-                logger.info(f"Directorio temporal eliminado: {self.download_dir}")
-        except Exception as e:
-            logger.error(f"Error al eliminar directorio temporal: {e}")
-
+    
     def normalizar_nombre(self, nombre):
         """
         Normaliza el nombre de un archivo o carpeta.
