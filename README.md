@@ -9,8 +9,9 @@ AFIP Nuestra Parte Extractor es una herramienta simplificada que se enfoca espec
 La herramienta:
 - Inicia sesión automáticamente en el portal de AFIP
 - Navega directamente a la sección "Nuestra Parte"
-- Captura capturas de pantalla completas de la información
+- Extrae y guarda en PDF las tablas de información disponibles
 - Organiza los resultados por contribuyente en carpetas separadas
+- Detecta y evita guardar duplicados para optimizar el proceso
 
 ## Requisitos
 
@@ -77,19 +78,36 @@ python afip_extractor.py --file mi_archivo.csv
 python afip_extractor.py --help
 ```
 
+## Conversión de formato TXT a CSV
+
+Si tiene datos de contribuyentes en formato TXT (formato antiguo), puede convertirlos al nuevo formato CSV:
+
+```bash
+python convertir_txt_a_csv.py mi_archivo.txt
+```
+
 ## Resultados
 
-Los resultados se guardan en la carpeta "Resultados", organizados de la siguiente manera:
+Los resultados se guardan en la carpeta "AFIP_Resultados" en el Escritorio, organizados de la siguiente manera:
 
 ```
-Resultados/
+AFIP_Resultados/
   ├── Nombre del Contribuyente/
-  │    └── Nuestra_Parte_[año]_[timestamp]/
-  │         ├── captura_01.png
-  │         ├── captura_02.png
-  │         └── ...
+  │    └── CUIT/
+  │         └── año_XXXX/
+  │              └── Nombre de la Sección/
+  │                   ├── tabla1_icono1.pdf
+  │                   ├── tabla2_icono1.pdf
+  │                   └── ...
   └── ...
 ```
+
+## Características adicionales
+
+- **Verificación de carpetas existentes**: Al iniciar, el programa verifica si la carpeta de resultados ya existe y pregunta si desea eliminarla antes de continuar.
+- **Manejo de errores de login**: Si hay problemas con las credenciales de un contribuyente, el programa lo registra y continúa con el siguiente.
+- **Detección de duplicados**: El programa evita guardar archivos duplicados, optimizando el proceso de extracción.
+- **Optimización de velocidad**: Tiempos de espera calibrados para maximizar la velocidad sin comprometer la estabilidad.
 
 ## Seguridad
 
@@ -110,23 +128,4 @@ Resultados/
 - Verifique su conexión a Internet
 - Asegúrese de que Chrome esté actualizado
 - Compruebe que el chromedriver sea compatible con su versión de Chrome
-- Verifique las capturas de pantalla generadas en la carpeta Resultados
-
-### Archivos de log
-
-El programa genera logs detallados en el archivo `afip_extractor.log` que pueden ayudar a diagnosticar problemas.
-
-## Actualización desde versiones anteriores
-
-Si viene de una versión anterior:
-
-1. El formato de archivo principal ahora es CSV en lugar de TXT
-2. La columna "clave" ahora se llama "clave_fiscal" para mayor claridad
-3. El programa puede convertir automáticamente formatos de archivo antiguos
-
-Para convertir un archivo TXT antiguo a CSV:
-
-```python
-from csv_utils import CSVHandler
-CSVHandler.convertir_txt_a_csv("ruta_al_archivo.txt", "nuevo_archivo.csv")
-``` 
+- Verifique los archivos PDF generados en la carpeta de resultados 

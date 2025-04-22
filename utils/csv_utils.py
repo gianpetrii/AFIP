@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Utilidades para manejar archivos CSV en el Extractor AFIP
+Utilidades para manejar archivos CSV en el Extractor AFIP.
+Este módulo contiene clases y funciones para leer, escribir y manipular
+archivos CSV utilizados por el extractor AFIP.
 """
 
 import os
@@ -13,8 +15,15 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class CSVHandler:
-    """Clase para manejar operaciones de archivos CSV en el extractor AFIP"""
+    """
+    Clase para manejar operaciones de archivos CSV en el extractor AFIP.
     
+    Esta clase proporciona métodos estáticos para trabajar con archivos CSV
+    de contribuyentes, incluyendo lectura, conversión desde formato antiguo (TXT)
+    y creación de archivos de ejemplo.
+    """
+    
+    # Columnas que deben estar presentes en el archivo CSV
     COLUMNAS_REQUERIDAS = ['cuit', 'clave_fiscal', 'nombre']
     
     @staticmethod

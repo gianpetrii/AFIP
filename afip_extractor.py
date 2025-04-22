@@ -19,6 +19,9 @@ from datetime import datetime
 import shutil
 import subprocess
 import re
+import signal
+import functools
+import threading
 
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
@@ -29,8 +32,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# Importar el manejador de CSV
-from csv_utils import CSVHandler
+# Importar utilidades
+from utils.csv_utils import CSVHandler
+from utils.file_utils import normalizar_nombre, crear_estructura_carpetas, verificar_archivo_existe
 
 # Intentar importar pyautogui para manejar diálogos nativos
 try:
@@ -57,8 +61,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AFIP Extractor")
 
+# Definición de una excepción para el timeout
+class ContribuyenteTimeoutError(Exception):
+    """Excepción para cuando un contribuyente supera el tiempo máximo de procesamiento."""
+    pass
+
 class NuestraParteExtractor:
     def __init__(self):
+        """
+        Inicializa el extractor de información de AFIP Nuestra Parte.
+        Configura las rutas de directorios, verifica el entorno y prepara
+        las variables necesarias para el funcionamiento.
+        """
         self.directorio_actual = os.getcwd()
         
         # Limpiar el archivo de logs al inicio de una nueva ejecución
@@ -79,6 +93,10 @@ class NuestraParteExtractor:
         # Simplificar la estructura de carpetas para evitar rutas demasiado largas
         # Usar carpeta de resultados directamente en el Desktop sin subcarpetas anidadas profundas
         self.output_folder = os.path.join(os.path.expanduser('~'), "Desktop", "AFIP_Resultados")
+        
+        # Configuración del timeout para el procesamiento de un contribuyente (en segundos)
+        # 20 minutos por defecto, ajustable según necesidad
+        self.contribuyente_timeout = 20 * 60
         
         # Verificar si estamos en WSL para configuración especial
         self.is_wsl = sys.platform.startswith('linux') and 'microsoft' in os.uname().release.lower()
@@ -115,7 +133,12 @@ class NuestraParteExtractor:
         logger.info(f"Directorio de descargas configurado en: {self.download_dir}")
         
     def setup_driver(self):
-        """Configura y devuelve el driver de Chrome con opciones optimizadas"""
+        """
+        Configura y devuelve el driver de Chrome con opciones optimizadas.
+        
+        Returns:
+            WebDriver: Instancia configurada del WebDriver de Chrome
+        """
         chrome_options = Options()
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -164,46 +187,21 @@ class NuestraParteExtractor:
             raise
     
     def crear_estructura_carpetas(self):
-        """Crea la carpeta principal donde se guardarán los resultados"""
-        try:
-            os.makedirs(self.output_folder, exist_ok=True)
-            logger.info(f"Carpeta {self.output_folder} creada exitosamente")
-        except Exception as e:
-            logger.error(f"Error al crear carpeta {self.output_folder}: {e}")
-            raise
-    
-    def normalizar_nombre(self, nombre):
         """
-        Normaliza un nombre para usarlo como archivo o carpeta.
+        Crea la carpeta principal donde se guardarán los resultados.
         
-        Args:
-            nombre: Nombre a normalizar
-            
         Returns:
-            str: Nombre normalizado sin caracteres inválidos
+            bool: True si se creó exitosamente, False en caso contrario
         """
-        # Si el nombre está vacío, usar un nombre genérico
-        if not nombre or nombre.strip() == "":
-            return "sin_nombre"
-            
-        # Reemplazar caracteres no permitidos en nombres de archivo
-        resultado = nombre.strip()
-        # Reemplazar caracteres no alfanuméricos (excepto espacios) por guiones bajos
-        caracteres_invalidos = r'[<>:"/\\|?*]'
-        resultado = re.sub(caracteres_invalidos, '_', resultado)
-        # Reemplazar múltiples espacios por uno solo
-        resultado = re.sub(r'\s+', ' ', resultado)
-        # Reemplazar espacios por guiones bajos para evitar problemas con rutas
-        resultado = resultado.replace(' ', '_')
-        # Limitar longitud para evitar problemas con rutas demasiado largas
-        if len(resultado) > 50:
-            resultado = resultado[:50]
-        
-        return resultado
+        return crear_estructura_carpetas(self.output_folder)
     
     def leer_contribuyentes(self, csv_file="clientes.csv"):
-        """Lee la lista de contribuyentes desde un archivo CSV
+        """
+        Lee la lista de contribuyentes desde un archivo CSV.
         
+        Args:
+            csv_file (str): Ruta al archivo CSV con los datos de los contribuyentes
+            
         Returns:
             list: Lista de diccionarios con información de contribuyentes
         """
@@ -294,7 +292,17 @@ class NuestraParteExtractor:
         return False
     
     def iniciar_sesion(self, driver, cuit, clave_fiscal):
-        """Inicia sesión en el sitio de AFIP"""
+        """
+        Inicia sesión en el sitio de AFIP.
+        
+        Args:
+            driver: WebDriver de Selenium
+            cuit: CUIT del contribuyente
+            clave_fiscal: Clave fiscal del contribuyente
+            
+        Returns:
+            bool: True si el inicio de sesión fue exitoso, False en caso contrario
+        """
         try:
             logger.info(f"Iniciando navegación directamente a la página de login de AFIP")
             # Ir directamente a la URL de login
@@ -496,28 +504,6 @@ class NuestraParteExtractor:
             logger.error(f"Error general al iniciar sesión: {e}")
             return False
     
-    def navegacion_alternativa(self, driver):
-        """Intenta una navegación alternativa a Nuestra Parte"""
-        logger.info("Intentando navegación alternativa directa a URL de Nuestra Parte...")
-        try:
-            driver.get("https://serviciosjava2.afip.gob.ar/cgpf/jsp/mostrarMenu.do")
-            
-            # Verificar si la URL contiene alguno de los fragmentos válidos
-            url_despues_redireccion = driver.current_url
-            logger.info(f"URL después de navegación directa: {url_despues_redireccion}")
-            
-            urls_validas = ["serviciosjava2.afip.gob.ar/cgpf", "nuestra-parte", "nuestraparte"]
-            
-            if any(fragmento in url_despues_redireccion.lower() for fragmento in urls_validas):
-                logger.info("Navegación directa exitosa a Nuestra Parte")
-                return True
-            else:
-                logger.error("La navegación directa también falló")
-                return False
-        except Exception as e:
-            logger.error(f"Error durante la navegación directa: {e}")
-            return False
-    
     def procesar_nuestra_parte(self, driver, cuit, año, output_dir):
         """
         Procesa la sección "Nuestra Parte" para el CUIT y año especificados.
@@ -534,7 +520,7 @@ class NuestraParteExtractor:
         try:
             # Crear directorio de salida para este cuit si no existe
             contribuyente_dir = os.path.join(output_dir, cuit)
-            os.makedirs(contribuyente_dir, exist_ok=True)
+            crear_estructura_carpetas(contribuyente_dir)
             
             # Verificar que estamos en la página correcta
             current_url = driver.current_url
@@ -566,10 +552,10 @@ class NuestraParteExtractor:
                             
                             # Hacer scroll al botón y luego hacer clic
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
-                            time.sleep(1)
+                            time.sleep(0.5)  # Reducido de 1 a 0.5
                             driver.execute_script("arguments[0].click();", button)
                             logger.info(f"Se hizo clic en el botón del año {año}")
-                            time.sleep(5)  # Esperar a que cargue la información del año
+                            time.sleep(2)  # Reducido de 5 a 2 segundos
                             
                             año_encontrado = True
                             break
@@ -586,10 +572,10 @@ class NuestraParteExtractor:
                             logger.info(f"Usando el año más reciente disponible: {año_reciente}")
                             
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", recent_year)
-                            time.sleep(1)
+                            time.sleep(0.5)  # Reducido de 1 a 0.5
                             driver.execute_script("arguments[0].click();", recent_year)
                             logger.info(f"Se hizo clic en el año más reciente: {año_reciente}")
-                            time.sleep(5)  # Esperar a que cargue la información del año
+                            time.sleep(2)  # Reducido de 5 a 2 segundos
                             
                             # Actualizar el año para la carpeta de salida
                             año = año_reciente
@@ -616,7 +602,7 @@ class NuestraParteExtractor:
                             tab = driver.find_element(By.CSS_SELECTOR, selector)
                             driver.execute_script("arguments[0].click();", tab)
                             logger.info(f"Se hizo clic en pestaña usando selector: {selector}")
-                            time.sleep(2)
+                            time.sleep(1)  # Reducido de 2 a 1
                             break
                         except Exception as e:
                             logger.warning(f"No se encontró pestaña con selector: {selector}")
@@ -631,7 +617,7 @@ class NuestraParteExtractor:
                         for button in visible_buttons:
                             if button.text.strip() == str(año):
                                 driver.execute_script("arguments[0].click();", button)
-                                time.sleep(2)
+                                time.sleep(1)  # Reducido de 2 a 1
                                 año_encontrado = True
                 except Exception as e:
                     logger.error(f"Error en método alternativo: {e}")
@@ -640,9 +626,9 @@ class NuestraParteExtractor:
             if not año_encontrado:
                 logger.warning(f"No se pudo encontrar/seleccionar el año {año}, continuando con lo que esté disponible")
             
-            # Crear directorio para este año
-            año_dir = os.path.join(contribuyente_dir, f"año_{año}")
-            os.makedirs(año_dir, exist_ok=True)
+            # Crear directorio para este año (sin prefijo "año_")
+            año_dir = os.path.join(contribuyente_dir, str(año))
+            crear_estructura_carpetas(año_dir)
             
             # Procesar secciones de datos
             self.procesar_secciones_datos(driver, año_dir)
@@ -654,10 +640,19 @@ class NuestraParteExtractor:
             return False
     
     def procesar_secciones_datos(self, driver, output_dir):
-        """Procesa las secciones de datos y guarda la información en archivos."""
+        """
+        Procesa las secciones de datos y guarda la información en archivos.
+        
+        Args:
+            driver: WebDriver de Selenium
+            output_dir: Directorio donde guardar los resultados
+            
+        Returns:
+            bool: True si el proceso fue exitoso, False en caso contrario
+        """
         # Esperar brevemente a que la página cargue completamente
         logger.info("Esperando brevemente a que la página cargue los elementos básicos...")
-        time.sleep(2)
+        time.sleep(1)  # Reducido de 2 a 1 segundo
         
         # Conjunto para almacenar todas las rutas de archivos guardados y evitar duplicados
         archivos_guardados = set()
@@ -685,7 +680,7 @@ class NuestraParteExtractor:
                     
                     # Crear directorio para esta sección
                     seccion_dir = os.path.join(output_dir, self.normalizar_nombre(nombre_seccion))
-                    os.makedirs(seccion_dir, exist_ok=True)
+                    crear_estructura_carpetas(seccion_dir)
                     
                     # 3. Encontrar el container de los iconos y luego los iconos dentro de él
                     try:
@@ -715,14 +710,14 @@ class NuestraParteExtractor:
                                 
                                 # Hacer scroll al elemento para asegurarnos de que es visible
                                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", icono_click)
-                                time.sleep(1)
+                                time.sleep(0.5)  # Reducido de 1 a 0.5
                                 
                                 # Hacer clic mediante JavaScript para evitar problemas de visibilidad/clickeabilidad
                                 driver.execute_script("arguments[0].click();", icono_click)
                                 logger.info(f"Clic exitoso en ícono {j} de {nombre_icono}")
                                 
                                 # Esperar a que se carguen los datos
-                                time.sleep(3)
+                                time.sleep(1.5)  # Reducido de 3 a 1.5
                             except Exception as e:
                                 logger.error(f"Error al hacer clic en ícono {j}: {e}")
                                 continue
@@ -785,8 +780,6 @@ class NuestraParteExtractor:
                                             # Simplificar el nombre del archivo: Título de la tabla + nombre del ícono
                                             # Ya no incluimos el nombre de la sección principal porque ya está en el directorio
                                             nombre_archivo_base = self.normalizar_nombre(f"{titulo_tabla}_{nombre_icono}")
-                                            if len(nombre_archivo_base) > 80:  # Permitir nombres más largos pero no excesivos
-                                                nombre_archivo_base = nombre_archivo_base[:80]
                                             
                                             # Ruta completa del archivo
                                             ruta_completa = os.path.join(seccion_dir, f"{nombre_archivo_base}.pdf")
@@ -807,7 +800,7 @@ class NuestraParteExtractor:
                                             try:
                                                 # Hacer scroll al botón para que sea visible
                                                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", boton)
-                                                time.sleep(1)
+                                                time.sleep(0.5)  # Reducido de 1 a 0.5
                                                 
                                                 # Hacer clic en el botón de impresión
                                                 driver.execute_script("arguments[0].click();", boton)
@@ -823,16 +816,16 @@ class NuestraParteExtractor:
                                                     
                                                     # Crear directorio si no existe
                                                     dir_path = os.path.dirname(ruta_completa)
-                                                    os.makedirs(dir_path, exist_ok=True)
+                                                    crear_estructura_carpetas(dir_path)
                                                     
                                                     # Llamar al método de guardado de diálogo
                                                     exito = self.handle_save_dialog(ruta_completa)
                                                     
                                                     # Esperar un momento para que se procese el guardado
-                                                    time.sleep(3)
+                                                    time.sleep(2)  # Reducido de 3 a 2
                                                     
                                                     # Verificar si el archivo se creó correctamente
-                                                    if os.path.exists(ruta_completa):
+                                                    if verificar_archivo_existe(ruta_completa, timeout=10):
                                                         logger.info(f"PDF guardado exitosamente: {ruta_completa}")
                                                         # Agregar al conjunto de archivos guardados
                                                         archivos_guardados.add(ruta_completa)
@@ -863,7 +856,7 @@ class NuestraParteExtractor:
                                     if cerrar.is_displayed():
                                         driver.execute_script("arguments[0].click();", cerrar)
                                         logger.info("Cerrando sección actual antes de continuar")
-                                        time.sleep(1)
+                                        time.sleep(0.5)  # Reducido de 1 a 0.5
                                         break
                             except Exception as e:
                                 logger.warning(f"No se pudo cerrar la sección actual: {e}")
@@ -874,65 +867,163 @@ class NuestraParteExtractor:
                     
             # Al finalizar, mostrar resumen de archivos guardados
             logger.info(f"Total de archivos únicos guardados: {len(archivos_guardados)}")
+            return True
         except Exception as e:
             logger.error(f"Error general procesando secciones de datos: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            return False
     
     def procesar_contribuyente(self, contribuyente, año):
-        """Procesa toda la información de un contribuyente"""
+        """
+        Procesa toda la información de un contribuyente con un timeout general.
+        
+        Args:
+            contribuyente (dict): Diccionario con datos del contribuyente
+            año (str): Año a procesar
+            
+        Returns:
+            bool: True si el procesamiento fue exitoso, False en caso contrario
+        """
         nombre = contribuyente["nombre"]
         cuit = contribuyente["cuit"]
         clave_fiscal = contribuyente["clave_fiscal"]
         
         logger.info(f"Procesando contribuyente: {nombre}")
+        print(f"\nProcesando contribuyente: {nombre} (CUIT: {cuit})")
         
         # Crear carpeta para el contribuyente
         path_contribuyente = os.path.join(self.output_folder, nombre)
         try:
-            os.makedirs(path_contribuyente, exist_ok=True)
+            crear_estructura_carpetas(path_contribuyente)
             logger.info(f"Carpeta creada para contribuyente: {path_contribuyente}")
         except Exception as e:
             logger.error(f"Error al crear carpeta para {nombre}: {e}")
+            print(f"Error al crear carpeta para {nombre}. Continuando con el siguiente contribuyente...")
             return False
         
         # Iniciar driver
         driver = None
+        
+        # Establecer timeout global para este contribuyente
+        # Usamos threading.Timer en lugar de signal porque funciona en Windows y es más compatible
+        timer = None
+        
         try:
+            # Crear un temporizador que levantará una excepción si se excede el tiempo
+            timeout_event = threading.Event()
+            
+            # Función que se ejecutará cuando se acabe el tiempo
+            def timeout_callback():
+                logger.error(f"Timeout de {self.contribuyente_timeout} segundos excedido para {nombre}")
+                # Indicar que se ha excedido el tiempo
+                timeout_event.set()
+                # Intentar cerrar el navegador si existe
+                nonlocal driver
+                if driver:
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+            
+            # Iniciar temporizador
+            timer = threading.Timer(self.contribuyente_timeout, timeout_callback)
+            timer.daemon = True  # El timer se detendrá si el programa principal termina
+            timer.start()
+            
+            # Iniciar el procesamiento normal
             driver = self.setup_driver()
             
+            # Verificar periódicamente si se ha excedido el tiempo
+            def check_timeout():
+                if timeout_event.is_set():
+                    raise ContribuyenteTimeoutError(f"Tiempo máximo de {self.contribuyente_timeout}s excedido")
+            
             # Iniciar sesión
+            check_timeout()  # Verificar timeout antes de cada paso importante
             if not self.iniciar_sesion(driver, cuit, clave_fiscal):
                 with open(os.path.join(path_contribuyente, "error_login.txt"), "w") as f:
                     f.write("Error al intentar iniciar sesión. Verifique las credenciales.")
                 logger.error(f"Error al iniciar sesión para {nombre}")
+                print(f"Error al iniciar sesión para {nombre}. Continuando con el siguiente contribuyente...")
                 return False
             
             # Procesar Nuestra Parte
+            check_timeout()  # Verificar timeout antes de procesar
             resultado = self.procesar_nuestra_parte(driver, cuit, año, path_contribuyente)
             
             if resultado:
                 logger.info(f"Procesamiento de {nombre} completado exitosamente")
+                print(f"Procesamiento de {nombre} completado exitosamente")
                 return True
             else:
                 logger.warning(f"No se pudo procesar Nuestra Parte para {nombre}")
+                print(f"No se pudo procesar Nuestra Parte para {nombre}. Continuando con el siguiente contribuyente...")
                 return False
                 
+        except ContribuyenteTimeoutError:
+            logger.error(f"Timeout: Se excedió el tiempo máximo de {self.contribuyente_timeout}s para procesar {nombre}")
+            print(f"Timeout: Se excedió el tiempo máximo al procesar {nombre}. Continuando con el siguiente contribuyente...")
+            # Crear archivo indicando el error de timeout
+            with open(os.path.join(path_contribuyente, "error_timeout.txt"), "w") as f:
+                f.write(f"Error: Se excedió el tiempo máximo de {self.contribuyente_timeout} segundos para procesar este contribuyente.")
+            return False
         except Exception as e:
             logger.error(f"Error general procesando {nombre}: {e}")
+            print(f"Error procesando {nombre}: {e}. Continuando con el siguiente contribuyente...")
             return False
         finally:
+            # Cancelar el timer si aún está activo
+            if timer and timer.is_alive():
+                timer.cancel()
+                
             # Siempre cerrar el driver cuando termine el procesamiento
             if driver:
                 logger.info("Cerrando el navegador")
-                driver.quit()
+                try:
+                    driver.quit()
+                except Exception as e:
+                    logger.warning(f"Error al cerrar el navegador: {e}")
     
+    def verificar_carpeta_resultados(self):
+        """
+        Verifica si la carpeta de resultados ya existe y pregunta al usuario si desea eliminarla.
+        
+        Returns:
+            bool: True si se puede continuar con la ejecución, False si el usuario decide no eliminar la carpeta
+        """
+        if os.path.exists(self.output_folder):
+            print(f"\nATENCIÓN: La carpeta de resultados ya existe: {self.output_folder}")
+            respuesta = input("¿Desea eliminarla y continuar? (s/n): ").strip().lower()
+            
+            if respuesta == 's' or respuesta == 'si' or respuesta == 'y' or respuesta == 'yes':
+                try:
+                    import shutil
+                    shutil.rmtree(self.output_folder)
+                    logger.info(f"Carpeta de resultados eliminada: {self.output_folder}")
+                    print(f"Carpeta eliminada. Continuando...")
+                    return True
+                except Exception as e:
+                    logger.error(f"Error al eliminar la carpeta de resultados: {e}")
+                    print(f"Error al eliminar la carpeta. Continuando de todos modos...")
+                    return True
+            else:
+                logger.info("El usuario decidió no eliminar la carpeta de resultados. Terminando ejecución.")
+                print("Operación cancelada por el usuario.")
+                return False
+        
+        return True
+
     def ejecutar(self, año=None, csv_file="clientes.csv"):
         """Función principal que inicia todo el proceso"""
         try:
             # Mostrar banner e instrucciones
             self.mostrar_banner()
             
+            # Verificar la carpeta de resultados
+            if not self.verificar_carpeta_resultados():
+                return
+                
             # Solicitar año a evaluar si no se proporcionó
             if año is None:
                 año = self.solicitar_año()
@@ -1227,7 +1318,7 @@ class NuestraParteExtractor:
         logger.info(f"{mensaje}")
         
         # Pequeña espera inicial para dar tiempo a que se inicie el proceso de apertura
-        time.sleep(2)
+        time.sleep(1)  # Reducido de 2 a 1 segundo
         
         # Verificar brevemente si hay nuevas ventanas, pero no bloquear el proceso
         try:
@@ -1348,6 +1439,20 @@ class NuestraParteExtractor:
                 logger.info(f"Directorio temporal eliminado: {self.download_dir}")
         except Exception as e:
             logger.error(f"Error al eliminar directorio temporal: {e}")
+
+    def normalizar_nombre(self, nombre):
+        """
+        Normaliza el nombre de un archivo o carpeta.
+        Esta función ahora redirecciona a utils.file_utils.normalizar_nombre
+        
+        Args:
+            nombre: Nombre a normalizar
+            
+        Returns:
+            str: Nombre normalizado
+        """
+        from utils.file_utils import normalizar_nombre as norm
+        return norm(nombre)
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos"""
