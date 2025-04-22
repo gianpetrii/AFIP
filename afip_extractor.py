@@ -687,7 +687,7 @@ class NuestraParteExtractor:
                     if "Declaraciones juradas del periodo anterior" in nombre_seccion:
                         logger.info(f"Ignorando sección: {nombre_seccion}")
                         continue
-                    
+                                
                     # Crear directorio para esta sección
                     seccion_dir = os.path.join(output_dir, self.normalizar_nombre(nombre_seccion))
                     crear_estructura_carpetas(seccion_dir)
@@ -700,7 +700,7 @@ class NuestraParteExtractor:
                     except Exception as e:
                         logger.error(f"Error al buscar iconos en la sección {nombre_seccion}: {e}")
                         continue
-                    
+                                            
                     # 4. Procesar cada icono/sub-sección
                     for j, icono in enumerate(iconos, 1):
                         try:
@@ -955,39 +955,104 @@ class NuestraParteExtractor:
             # Iniciar sesión
             check_timeout()  # Verificar timeout antes de cada paso importante
             logger_usuario.info(f"Iniciando sesión para {nombre} (CUIT: {cuit})")
-            if not self.iniciar_sesion(driver, cuit, clave_fiscal):
-                with open(os.path.join(path_contribuyente, "error_login.txt"), "w") as f:
-                    f.write("Error al intentar iniciar sesión. Verifique las credenciales.")
-                logger.error(f"Error al iniciar sesión para {nombre}")
-                logger_usuario.info(f"Error al iniciar sesión para {nombre}. Verifique las credenciales (CUIT y clave fiscal).")
-                print(f"Error al iniciar sesión para {nombre}. Continuando con el siguiente contribuyente...")
+            
+            try:
+                resultado_login = self.iniciar_sesion(driver, cuit, clave_fiscal)
+                if not resultado_login:
+                    # Verificar si hay mensajes específicos de error en la página
+                    error_message = self.detectar_error_login(driver)
+                    
+                    if "cuit no encontrado" in error_message.lower() or "no existe" in error_message.lower():
+                        mensaje_error = f"Error: El CUIT {cuit} no existe o no está registrado en AFIP."
+                    elif "clave" in error_message.lower() or "contraseña" in error_message.lower() or "incorrecta" in error_message.lower():
+                        mensaje_error = f"Error: La clave fiscal para el CUIT {cuit} es incorrecta."
+                    elif "captcha" in error_message.lower():
+                        mensaje_error = "Error: No se pudo resolver el captcha de AFIP."
+                    elif "bloqueado" in error_message.lower() or "inhabilitado" in error_message.lower():
+                        mensaje_error = f"Error: El CUIT {cuit} está bloqueado o inhabilitado temporalmente."
+                    elif "sesión" in error_message.lower() or "activa" in error_message.lower():
+                        mensaje_error = f"Error: Ya existe una sesión activa para el CUIT {cuit}. Cierre todas las sesiones activas e intente nuevamente."
+                    elif "servicio" in error_message.lower() or "disponible" in error_message.lower():
+                        mensaje_error = "Error: El servicio de AFIP no está disponible en este momento. Intente más tarde."
+                    else:
+                        mensaje_error = "Error al iniciar sesión. Verifique las credenciales (CUIT y clave fiscal)."
+                    
+                    with open(os.path.join(path_contribuyente, "error_login.txt"), "w") as f:
+                        f.write(mensaje_error)
+                    
+                    logger.error(f"Error al iniciar sesión para {nombre}: {error_message}")
+                    logger_usuario.info(f"{mensaje_error}")
+                    print(f"{mensaje_error}")
+                    print(f"Continuando con el siguiente contribuyente...")
+                    return False
+            except TimeoutException:
+                mensaje_error = "Error: La página de AFIP tardó demasiado en responder durante el inicio de sesión."
+                with open(os.path.join(path_contribuyente, "error_timeout_login.txt"), "w") as f:
+                    f.write(mensaje_error)
+                
+                logger.error(f"Timeout durante el inicio de sesión para {nombre}")
+                logger_usuario.info(mensaje_error)
+                print(mensaje_error)
+                print(f"Continuando con el siguiente contribuyente...")
+                return False
+            except Exception as e:
+                mensaje_error = f"Error durante el inicio de sesión: {e}"
+                with open(os.path.join(path_contribuyente, "error_login_general.txt"), "w") as f:
+                    f.write(mensaje_error)
+                
+                logger.error(f"Error general durante el inicio de sesión para {nombre}: {e}")
+                logger_usuario.info(mensaje_error)
+                print(mensaje_error)
+                print(f"Continuando con el siguiente contribuyente...")
                 return False
             
             # Procesar Nuestra Parte
             check_timeout()  # Verificar timeout antes de procesar
             logger_usuario.info(f"Accediendo a la información del año {año} para {nombre}")
-            resultado = self.procesar_nuestra_parte(driver, cuit, año, path_contribuyente)
             
-            if resultado:
-                logger.info(f"Procesamiento de {nombre} completado exitosamente")
-                logger_usuario.info(f"Información fiscal del año {año} procesada exitosamente para {nombre}")
-                print(f"Procesamiento de {nombre} completado exitosamente")
-                return True
-            else:
-                logger.warning(f"No se pudo procesar Nuestra Parte para {nombre}")
-                logger_usuario.info(f"No se pudo obtener la información fiscal del año {año} para {nombre}")
-                print(f"No se pudo procesar Nuestra Parte para {nombre}. Continuando con el siguiente contribuyente...")
+            try:
+                resultado = self.procesar_nuestra_parte(driver, cuit, año, path_contribuyente)
+                
+                if resultado:
+                    logger.info(f"Procesamiento de {nombre} completado exitosamente")
+                    logger_usuario.info(f"Información fiscal del año {año} procesada exitosamente para {nombre}")
+                    print(f"Procesamiento de {nombre} completado exitosamente")
+                    return True
+                else:
+                    mensaje_error = f"No se pudo obtener la información fiscal del año {año} para {nombre}"
+                    with open(os.path.join(path_contribuyente, "error_nuestra_parte.txt"), "w") as f:
+                        f.write(mensaje_error)
+                    
+                    logger.warning(f"No se pudo procesar Nuestra Parte para {nombre}")
+                    logger_usuario.info(mensaje_error)
+                    print(mensaje_error)
+                    print(f"Continuando con el siguiente contribuyente...")
+                    return False
+            except Exception as e:
+                mensaje_error = f"Error al procesar la información fiscal: {e}"
+                with open(os.path.join(path_contribuyente, "error_procesamiento.txt"), "w") as f:
+                    f.write(mensaje_error)
+                
+                logger.error(f"Error al procesar Nuestra Parte para {nombre}: {e}")
+                logger_usuario.info(mensaje_error)
+                print(mensaje_error)
+                print(f"Continuando con el siguiente contribuyente...")
                 return False
                 
         except ContribuyenteTimeoutError:
-            logger.error(f"Timeout: Se excedió el tiempo máximo de {self.contribuyente_timeout}s para procesar {nombre}")
+            mensaje_error = f"Se excedió el tiempo máximo de {self.contribuyente_timeout} segundos para procesar este contribuyente."
+            with open(os.path.join(path_contribuyente, "error_timeout.txt"), "w") as f:
+                f.write(f"Error: {mensaje_error}")
+            
+            logger.error(f"Timeout: {mensaje_error}")
             logger_usuario.info(f"Se excedió el tiempo máximo de procesamiento para {nombre}. El proceso se interrumpió por seguridad.")
             print(f"Timeout: Se excedió el tiempo máximo al procesar {nombre}. Continuando con el siguiente contribuyente...")
-            # Crear archivo indicando el error de timeout
-            with open(os.path.join(path_contribuyente, "error_timeout.txt"), "w") as f:
-                f.write(f"Error: Se excedió el tiempo máximo de {self.contribuyente_timeout} segundos para procesar este contribuyente.")
             return False
         except Exception as e:
+            mensaje_error = f"Error inesperado: {e}"
+            with open(os.path.join(path_contribuyente, "error_general.txt"), "w") as f:
+                f.write(mensaje_error)
+            
             logger.error(f"Error general procesando {nombre}: {e}")
             logger_usuario.info(f"Error inesperado al procesar {nombre}: {e}")
             print(f"Error procesando {nombre}: {e}. Continuando con el siguiente contribuyente...")
@@ -1004,6 +1069,45 @@ class NuestraParteExtractor:
                     driver.quit()
                 except Exception as e:
                     logger.warning(f"Error al cerrar el navegador: {e}")
+                    
+    def detectar_error_login(self, driver):
+        """
+        Intenta detectar mensajes de error específicos en la página de login de AFIP.
+        
+        Args:
+            driver: WebDriver de Selenium
+            
+        Returns:
+            str: Mensaje de error detectado o string vacío si no se detecta error
+        """
+        try:
+            # Intentar encontrar elementos de error conocidos
+            error_selectors = [
+                "div.mensajeError",
+                "div.error",
+                "span.error",
+                ".alert-danger",
+                "#divErrores",
+                "#mensajeError"
+            ]
+            
+            for selector in error_selectors:
+                try:
+                    error_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for error_element in error_elements:
+                        if error_element.is_displayed() and error_element.text.strip():
+                            return error_element.text.strip()
+                except:
+                    continue
+            
+            # Si no se encontró un mensaje de error específico, verificar el título de la página
+            # para dar una pista sobre el problema
+            if "error" in driver.title.lower() or "problema" in driver.title.lower():
+                return f"Error en la página: {driver.title}"
+                
+            return ""
+        except:
+            return "Error desconocido durante el inicio de sesión"
     
     def verificar_carpeta_resultados(self, año):
         """
@@ -1049,7 +1153,7 @@ class NuestraParteExtractor:
         
         return True
     
-    def ejecutar(self, año=None, csv_file="clientes.csv"):
+    def ejecutar(self, año=None, csv_file=None):
         """Función principal que inicia todo el proceso"""
         try:
             # Mostrar banner e instrucciones
@@ -1075,12 +1179,22 @@ class NuestraParteExtractor:
             crear_estructura_carpetas(año_dir)
             logger_usuario.info(f"Carpeta de resultados para el año {año}: {año_dir}")
             
+            # Solicitar al usuario que seleccione el archivo CSV si no se proporcionó
+            if csv_file is None:
+                csv_file = self.seleccionar_archivo_csv()
+            
             # Verificar que el archivo CSV existe
             try:
                 self.verificar_archivo_clientes(csv_file)
                 logger_usuario.info(f"Usando archivo de contribuyentes: {csv_file}")
+            except FileNotFoundError:
+                logger_usuario.info(f"Error: El archivo '{csv_file}' no existe.")
+                print(f"\nError: No se encontró el archivo '{csv_file}'.")
+                print("Por favor, asegúrese de que el archivo existe en la ubicación especificada.")
+                print("Se ha creado un archivo de ejemplo que puede usar como referencia.")
+                return
             except Exception as e:
-                logger_usuario.info(f"Error al cargar archivo de contribuyentes. Asegúrese de que '{csv_file}' exista y tenga formato CSV válido.")
+                logger_usuario.info(f"Error al cargar archivo de contribuyentes: {e}")
                 print(f"\nError: No se pudo cargar el archivo de contribuyentes '{csv_file}'.")
                 print("Asegúrese de que el archivo exista y tenga formato CSV válido con las columnas: nombre,cuit,clave_fiscal")
                 print("Se ha creado un archivo de ejemplo que puede usar como referencia.")
@@ -1090,9 +1204,15 @@ class NuestraParteExtractor:
             try:
                 contribuyentes = self.leer_contribuyentes(csv_file)
                 logger_usuario.info(f"Se encontraron {len(contribuyentes)} contribuyentes para procesar")
+            except ValueError as e:
+                logger_usuario.info(f"Error en el formato del archivo CSV: {e}")
+                print(f"\nError en el formato del archivo CSV: {e}")
+                print("El archivo debe tener formato CSV válido con las columnas: nombre,cuit,clave_fiscal")
+                print("Verifique que todas las columnas estén presentes y que los datos sean correctos.")
+                return
             except Exception as e:
-                logger_usuario.info(f"Error al leer contribuyentes: {e}")
-                print(f"\nError al leer contribuyentes: {e}")
+                logger_usuario.info(f"Error inesperado al leer contribuyentes: {e}")
+                print(f"\nError inesperado al leer contribuyentes: {e}")
                 print("Verifique que el archivo CSV tenga el formato correcto.")
                 return
             
@@ -1379,43 +1499,33 @@ class NuestraParteExtractor:
             # Retornar True para continuar con las siguientes tablas a pesar del error
             return True
 
-    def esperar_nueva_ventana(self, driver, ventanas_antes, mensaje="Esperando nueva ventana", max_intentos=5):
+    def esperar_nueva_ventana(self, driver, ventanas_antes, mensaje, max_intentos=3):
         """
-        Espera a que se abra una nueva ventana y cambia a ella.
+        Espera a que aparezca una nueva ventana y cambia a ella.
         
         Args:
-            driver: WebDriver de Selenium
-            ventanas_antes: Lista de handles de ventanas antes de la acción
-            mensaje: Mensaje para los logs
-            max_intentos: Número máximo de intentos
+            driver: El driver de Selenium.
+            ventanas_antes: Lista de handles de ventanas antes de la acción.
+            mensaje: Mensaje para el log.
+            max_intentos: Número máximo de intentos.
             
         Returns:
-            bool: True si se detectó y cambió a una nueva ventana, False en caso contrario
+            bool: True si se pudo cambiar a la nueva ventana, False en caso contrario.
         """
-        logger.info(f"{mensaje}")
+        logger.info(f"{mensaje} (esperando 2 segundos)")
+        time.sleep(2)  # Esperar un tiempo inicial
         
-        # Pequeña espera inicial para dar tiempo a que se inicie el proceso de apertura
-        time.sleep(1)  # Reducido de 2 a 1 segundo
+        ventanas_despues = driver.window_handles
+        nuevas_ventanas = [w for w in ventanas_despues if w not in ventanas_antes]
         
-        # Verificar brevemente si hay nuevas ventanas, pero no bloquear el proceso
-        try:
-            ventanas_despues = driver.window_handles
-            if len(ventanas_despues) > len(ventanas_antes):
-                # Hay una nueva ventana, intentar cambiar a ella
-                nueva_ventana = [v for v in ventanas_despues if v not in ventanas_antes][0]
-                try:
-                    driver.switch_to.window(nueva_ventana)
-                    logger.info(f"Cambiado a nueva ventana: {driver.current_url}")
-                except Exception as e:
-                    logger.warning(f"Error al cambiar a la nueva ventana, pero continuando: {e}")
-            else:
-                logger.info("No se detectó una nueva ventana por handle, pero continuando de todos modos")
-        except Exception as e:
-            logger.warning(f"Error al verificar nuevas ventanas, pero continuando: {e}")
-        
-        # Siempre continuar con el proceso, asumiendo que la ventana de impresión está visible
-        # aunque no la hayamos detectado como un handle separado
-        return True
+        if nuevas_ventanas:
+            nueva_ventana = nuevas_ventanas[0]
+            logger.info(f"Detectada nueva ventana. Cambiando a: {nueva_ventana}")
+            driver.switch_to.window(nueva_ventana)
+            return True
+        else:
+            logger.warning(f"No se detectaron nuevas ventanas, pero continuaremos igualmente.")
+            return True  # Siempre retornamos True para continuar con el proceso
     
     def esperar_url_contenga(self, driver, texto, mensaje="Esperando URL", max_intentos=5):
         """
@@ -1503,6 +1613,14 @@ class NuestraParteExtractor:
                 logger.info("Navegador cerrado correctamente")
             except Exception as e:
                 logger.warning(f"Error al cerrar el navegador: {e}")
+            finally:
+                # Asegurar que se liberen los recursos
+                if hasattr(self, 'directorio_temporal') and os.path.exists(self.directorio_temporal):
+                    try:
+                        shutil.rmtree(self.directorio_temporal)
+                        logger.info("Directorio temporal eliminado correctamente")
+                    except Exception as e:
+                        logger.warning(f"Error al eliminar directorio temporal: {e}")
     
     def normalizar_nombre(self, nombre):
         """
@@ -1518,6 +1636,59 @@ class NuestraParteExtractor:
         from utils.file_utils import normalizar_nombre as norm
         return norm(nombre)
 
+    def seleccionar_archivo_csv(self, default_filename="clientes.csv"):
+        """
+        Permite al usuario seleccionar un archivo CSV mediante un explorador de archivos.
+        
+        Args:
+            default_filename (str): Nombre del archivo por defecto
+            
+        Returns:
+            str: Ruta al archivo seleccionado o valor predeterminado si se canceló
+        """
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            logger.info("Abriendo explorador de archivos para seleccionar CSV")
+            
+            # Inicializar Tkinter sin mostrar la ventana principal
+            root = tk.Tk()
+            root.withdraw()
+            
+            # Preparar el diálogo de selección
+            filetypes = [("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")]
+            initialdir = os.getcwd()
+            
+            print("\nPor favor, seleccione el archivo CSV con los datos de los contribuyentes...")
+            
+            # Mostrar el diálogo y obtener la selección
+            archivo_seleccionado = filedialog.askopenfilename(
+                title="Seleccionar archivo CSV",
+                initialdir=initialdir,
+                initialfile=default_filename,
+                filetypes=filetypes
+            )
+            
+            # Cerrar Tkinter
+            root.destroy()
+            
+            # Procesar el resultado
+            if archivo_seleccionado:
+                logger.info(f"Archivo seleccionado: {archivo_seleccionado}")
+                return archivo_seleccionado
+            
+            # Si no se seleccionó nada, usar el predeterminado
+            logger.info(f"No se seleccionó ningún archivo, usando el predeterminado: {default_filename}")
+            return os.path.join(self.directorio_actual, default_filename)
+            
+        except Exception as e:
+            # Manejar cualquier error
+            logger.error(f"Error al abrir el explorador de archivos: {e}")
+            print(f"\nNo se pudo abrir el explorador de archivos: {e}")
+            print(f"Se usará el archivo predeterminado: {default_filename}")
+            return os.path.join(self.directorio_actual, default_filename)
+
 def parse_arguments():
     """Parsea los argumentos de línea de comandos"""
     parser = argparse.ArgumentParser(description="AFIP Nuestra Parte - Extracción de información fiscal")
@@ -1531,9 +1702,15 @@ def parse_arguments():
     
     parser.add_argument(
         "--file", "-f",
-        help="Archivo CSV con datos de contribuyentes",
+        help="Archivo CSV con datos de contribuyentes (si no se especifica, se mostrará un diálogo para seleccionarlo)",
         type=str,
-        default="clientes.csv"
+        default=None
+    )
+    
+    parser.add_argument(
+        "--select-file",
+        help="Mostrar diálogo para seleccionar archivo CSV",
+        action="store_true"
     )
     
     return parser.parse_args()
@@ -1543,7 +1720,11 @@ if __name__ == "__main__":
     try:
         args = parse_arguments()
         extractor = NuestraParteExtractor()
-        extractor.ejecutar(año=args.year, csv_file=args.file)
+        
+        # Si se especificó --select-file, ignorar el valor de --file
+        csv_file = None if args.select_file else args.file
+        
+        extractor.ejecutar(año=args.year, csv_file=csv_file)
     except Exception as e:
         logging.error(f"Error general en la aplicación: {e}")
         print(f"\nError inesperado: {e}")
