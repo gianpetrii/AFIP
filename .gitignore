@@ -34,8 +34,9 @@ Resultados/
 Downloads/
 
 # Credentials and sensitive data
-clientes.csv
-clientes_importantes.csv
+*.csv
+*.xlsx
+*.xlsx:Zone.Identifier
 PONER LISTADO AQUI/
 
 # Chrome driver
