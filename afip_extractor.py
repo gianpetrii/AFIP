@@ -35,6 +35,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 # Importar utilidades
 from utils.csv_utils import CSVHandler
 from utils.file_utils import normalizar_nombre, crear_estructura_carpetas, verificar_archivo_existe
+from utils.browser_utils import verificar_chrome_instalado, descargar_chrome, limpiar_cache_chromedriver
 
 # Intentar importar pyautogui para manejar diálogos nativos
 try:
@@ -151,10 +152,42 @@ class NuestraParteExtractor:
     def setup_driver(self):
         """
         Configura y devuelve el driver de Chrome con opciones optimizadas.
+        Usa webdriver-manager para descargar automáticamente el chromedriver correcto.
         
         Returns:
             WebDriver: Instancia configurada del WebDriver de Chrome
         """
+        # Verificar que Chrome esté instalado
+        try:
+            if not verificar_chrome_instalado():
+                mensaje_chrome = """
+ERROR: Google Chrome no está instalado en este sistema.
+
+Para utilizar el Extractor AFIP, necesitas tener Google Chrome instalado.
+Por favor, instala Google Chrome y vuelve a ejecutar este programa.
+
+Puedes descargar Chrome desde: https://www.google.com/chrome/
+"""
+                logger.error("Google Chrome no está instalado en este sistema")
+                # Escribir mensaje en archivo específico en la carpeta de resultados
+                ruta_mensaje = os.path.join(self.output_folder, "CHROME_NO_INSTALADO.txt")
+                try:
+                    with open(ruta_mensaje, 'w', encoding='utf-8') as f:
+                        f.write(mensaje_chrome)
+                    logger.info(f"Mensaje de ayuda guardado en: {ruta_mensaje}")
+                except Exception as e:
+                    logger.error(f"Error al guardar mensaje de ayuda: {e}")
+                
+                # También escribirlo en el log de usuario
+                logger_usuario.error("ERROR: Google Chrome no está instalado en este sistema.")
+                logger_usuario.error("Para utilizar el Extractor AFIP, necesitas tener Google Chrome instalado.")
+                logger_usuario.error("Por favor, instala Google Chrome y vuelve a ejecutar este programa.")
+                logger_usuario.error("Puedes descargar Chrome desde: https://www.google.com/chrome/")
+                
+                raise Exception("Chrome no está instalado")
+        except ImportError:
+            logger.warning("No se pudo verificar la instalación de Chrome, continuando de todas formas")
+        
         chrome_options = Options()
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -182,21 +215,252 @@ class NuestraParteExtractor:
         }
         chrome_options.add_experimental_option('prefs', prefs)
         
-        # Detectar sistema operativo para usar el driver correcto
-        if sys.platform.startswith('win'):
-            driver_path = os.path.join(self.directorio_actual, "chromedriver_win32", "chromedriver.exe")
-        elif sys.platform.startswith('linux'):
-            driver_path = os.path.join(self.directorio_actual, "chromedriver_linux64", "chromedriver")
-        else:  # Darwin (macOS)
-            driver_path = os.path.join(self.directorio_actual, "chromedriver_mac64", "chromedriver")
+        try:
+            # Intentar usar webdriver-manager para obtener el ChromeDriver
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager
+                from selenium.webdriver.chrome.service import Service
+                
+                logger.info("Usando webdriver-manager para obtener ChromeDriver")
+                
+                # Corregir problema del THIRD_PARTY_NOTICES siendo detectado como el ejecutable
+                try:
+                    # Limpiar caché para evitar problemas con versiones antiguas
+                    limpiar_cache_chromedriver()
+                    
+                    # Instalar el chromedriver
+                    driver_path = ChromeDriverManager().install()
+                    
+                    # Verificar si el path es correcto o si es el THIRD_PARTY_NOTICES
+                    if 'THIRD_PARTY_NOTICES' in driver_path:
+                        logger.warning("El path del driver contiene THIRD_PARTY_NOTICES, buscando el ejecutable correcto")
+                        
+                        # Buscar el chromedriver real en la carpeta
+                        driver_dir = os.path.dirname(os.path.dirname(driver_path))
+                        if sys.platform.startswith('win'):
+                            chromedriver_path = os.path.join(driver_dir, "chromedriver.exe")
+                        else:
+                            chromedriver_path = os.path.join(driver_dir, "chromedriver")
+                        
+                        if os.path.exists(chromedriver_path):
+                            driver_path = chromedriver_path
+                            logger.info(f"Chromedriver correcto encontrado en: {driver_path}")
+                        else:
+                            # Buscar recursivamente
+                            import glob
+                            if sys.platform.startswith('win'):
+                                candidates = glob.glob(os.path.join(driver_dir, "**", "chromedriver.exe"), recursive=True)
+                            else:
+                                candidates = glob.glob(os.path.join(driver_dir, "**", "chromedriver"), recursive=True)
+                            
+                            if candidates:
+                                driver_path = candidates[0]
+                                logger.info(f"Chromedriver encontrado mediante búsqueda recursiva: {driver_path}")
+                            else:
+                                # Buscar en la carpeta ~/.wdm
+                                wdm_dir = os.path.expanduser("~/.wdm")
+                                if os.path.exists(wdm_dir):
+                                    if sys.platform.startswith('win'):
+                                        candidates = glob.glob(os.path.join(wdm_dir, "**", "chromedriver.exe"), recursive=True)
+                                    else:
+                                        candidates = glob.glob(os.path.join(wdm_dir, "**", "chromedriver"), recursive=True)
+                                    
+                                    if candidates:
+                                        driver_path = candidates[0]
+                                        logger.info(f"Chromedriver encontrado en wdm_dir: {driver_path}")
+                    
+                    # Dar permisos de ejecución en Linux/Mac
+                    if not sys.platform.startswith('win') and os.path.exists(driver_path):
+                        try:
+                            os.chmod(driver_path, 0o755)
+                            logger.info(f"Permisos de ejecución asignados a: {driver_path}")
+                        except Exception as e:
+                            logger.warning(f"No se pudieron asignar permisos de ejecución: {e}")
+                    
+                    # Verificar que el archivo realmente existe
+                    if not os.path.exists(driver_path):
+                        raise FileNotFoundError(f"No se encontró el chromedriver en: {driver_path}")
+                    
+                    service = Service(executable_path=driver_path)
+                    driver = webdriver.Chrome(service=service, options=chrome_options)
+                    logger.info("ChromeDriver instalado correctamente mediante webdriver-manager")
+                    return driver
+                    
+                except Exception as e:
+                    logger.error(f"Error al usar webdriver-manager: {e}")
+                    # Continuar con el método alternativo
+                    raise
+            except ImportError:
+                logger.warning("webdriver-manager no está instalado, intentando método alternativo")
+                # Método alternativo: intentar detectar el chromedriver local
+                if not self._usar_chromedriver_local():
+                    # Si no podemos usar el chromedriver local, intentar descarga manual
+                    self._descargar_chromedriver()
+                
+                # Detectar sistema operativo para usar el driver correcto
+                if sys.platform.startswith('win'):
+                    driver_path = os.path.join(self.directorio_actual, "chromedriver_win32", "chromedriver.exe")
+                elif sys.platform.startswith('linux'):
+                    driver_path = os.path.join(self.directorio_actual, "chromedriver_linux64", "chromedriver")
+                else:  # Darwin (macOS)
+                    driver_path = os.path.join(self.directorio_actual, "chromedriver_mac64", "chromedriver")
+                
+                if os.path.exists(driver_path):
+                    logger.info(f"Usando ChromeDriver encontrado en: {driver_path}")
+                    service = Service(executable_path=driver_path)
+                    driver = webdriver.Chrome(service=service, options=chrome_options)
+                    return driver
+                else:
+                    # Si todo falla, intentar sin especificar la ruta
+                    logger.warning("No se encontró ChromeDriver local, intentando sin ruta específica")
+                    driver = webdriver.Chrome(options=chrome_options)
+                    return driver
+        except Exception as e:
+            error_message = f"Error al iniciar Chrome: {e}"
+            logger.error(error_message)
+            
+            # Guardar un mensaje claro para el usuario en la carpeta de resultados
+            ruta_mensaje = os.path.join(self.output_folder, "ERROR_CHROME.txt")
+            try:
+                mensaje_error = f"""
+ERROR AL INICIAR GOOGLE CHROME
+
+Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+
+El programa no pudo iniciar Google Chrome. Esto puede deberse a:
+1. Chrome no está instalado correctamente
+2. El controlador ChromeDriver no es compatible con tu versión de Chrome
+3. Problemas de permisos en el sistema
+
+Error específico: {e}
+
+SOLUCIONES:
+1. Verifica que Google Chrome esté instalado correctamente
+2. Actualiza Google Chrome a la última versión
+3. Si estás en Linux, asegúrate de que Chrome tenga permisos de ejecución
+
+Si el problema persiste, contacta con soporte.
+"""
+                with open(ruta_mensaje, 'w', encoding='utf-8') as f:
+                    f.write(mensaje_error)
+                logger.info(f"Mensaje de error guardado en: {ruta_mensaje}")
+            except Exception as write_error:
+                logger.error(f"Error al guardar mensaje de error: {write_error}")
+                
+            # También escribirlo en el log de usuario
+            logger_usuario.error("ERROR AL INICIAR GOOGLE CHROME")
+            logger_usuario.error("El programa no pudo iniciar Google Chrome correctamente.")
+            logger_usuario.error(f"Error específico: {e}")
+            
+            raise
+            
+    def _usar_chromedriver_local(self):
+        """
+        Intenta detectar si existe un chromedriver local en las rutas comunes.
+        
+        Returns:
+            bool: True si se encontró, False en caso contrario
+        """
+        # Rutas comunes donde puede estar el ChromeDriver
+        rutas_posibles = [
+            os.path.join(self.directorio_actual, "chromedriver"),
+            os.path.join(self.directorio_actual, "chromedriver.exe"),
+            os.path.join(self.directorio_actual, "chromedriver_win32", "chromedriver.exe"),
+            os.path.join(self.directorio_actual, "chromedriver_linux64", "chromedriver"),
+            os.path.join(self.directorio_actual, "chromedriver_mac64", "chromedriver"),
+            "/usr/local/bin/chromedriver",
+            "/usr/bin/chromedriver"
+        ]
+        
+        for ruta in rutas_posibles:
+            if os.path.exists(ruta):
+                logger.info(f"ChromeDriver encontrado en: {ruta}")
+                return True
+                
+        logger.warning("No se encontró ChromeDriver en las rutas comunes")
+        return False
+        
+    def _descargar_chromedriver(self):
+        """
+        Intenta descargar manualmente el ChromeDriver más reciente.
+        
+        Returns:
+            bool: True si se descargó correctamente, False en caso contrario
+        """
+        import platform
+        import zipfile
+        import requests
+        import re
         
         try:
-            service = Service(executable_path=driver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            return driver
+            logger.info("Intentando descargar ChromeDriver automáticamente")
+            
+            # Determinar sistema operativo y arquitectura
+            os_name = platform.system().lower()
+            arch = platform.architecture()[0]
+            
+            # Determinar URL de descarga según sistema operativo
+            if os_name == "windows":
+                plataforma = "win32"
+            elif os_name == "linux":
+                plataforma = "linux64"
+            elif os_name == "darwin":  # macOS
+                plataforma = "mac64" if arch == "64bit" else "mac32"
+            else:
+                logger.error(f"Sistema operativo no soportado: {os_name}")
+                return False
+                
+            # Obtener la última versión de ChromeDriver
+            try:
+                # Obtener la versión más reciente de ChromeDriver
+                url_latest = "https://chromedriver.storage.googleapis.com/LATEST_RELEASE"
+                r = requests.get(url_latest, timeout=30)
+                version = r.text.strip()
+                logger.info(f"Última versión de ChromeDriver: {version}")
+            except Exception as e:
+                logger.error(f"Error al obtener la versión de ChromeDriver: {e}")
+                return False
+                
+            # Crear carpeta de destino
+            destino = os.path.join(self.directorio_actual, f"chromedriver_{plataforma}")
+            os.makedirs(destino, exist_ok=True)
+            
+            # URL de descarga
+            download_url = f"https://chromedriver.storage.googleapis.com/{version}/chromedriver_{plataforma}.zip"
+            logger.info(f"Descargando ChromeDriver desde: {download_url}")
+            
+            # Descargar el archivo
+            r = requests.get(download_url, stream=True, timeout=120)
+            zip_path = os.path.join(self.directorio_actual, f"chromedriver_{plataforma}.zip")
+            
+            with open(zip_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024):
+                    if chunk:
+                        f.write(chunk)
+                        
+            logger.info(f"ChromeDriver descargado en: {zip_path}")
+            
+            # Extraer el archivo ZIP
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(destino)
+                
+            logger.info(f"ChromeDriver extraído en: {destino}")
+            
+            # Eliminar el archivo ZIP descargado
+            os.remove(zip_path)
+            
+            # Dar permisos de ejecución en Linux/Mac
+            if os_name in ["linux", "darwin"]:
+                driver_path = os.path.join(destino, "chromedriver")
+                os.chmod(driver_path, 0o755)
+                logger.info(f"Permisos de ejecución asignados a: {driver_path}")
+                
+            logger.info("ChromeDriver descargado e instalado correctamente")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error al iniciar Chrome: {e}")
-            raise
+            logger.error(f"Error al descargar ChromeDriver: {e}")
+            return False
     
     def crear_estructura_carpetas(self, ruta=None):
         """

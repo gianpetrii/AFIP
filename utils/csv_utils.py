@@ -49,58 +49,104 @@ class CSVHandler:
             logger.error(f"No se encontró el archivo de contribuyentes: {ruta_archivo}")
             return contribuyentes
             
-        try:
-            with open(ruta_archivo, 'r', encoding='utf-8') as archivo:
-                lector_csv = csv.DictReader(archivo)
+        # Lista de codificaciones para intentar, en orden de preferencia
+        codificaciones = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']
+        
+        for encoding in codificaciones:
+            try:
+                logger.info(f"Intentando leer el archivo con codificación: {encoding}")
+                contribuyentes = []  # Reiniciar lista en cada intento
                 
-                # Obtener las columnas del archivo CSV
-                columnas_csv = lector_csv.fieldnames
-                
-                # Verificar si necesitamos adaptar los nombres de las columnas (compatibilidad)
-                map_columnas = {}
-                
-                # Si el archivo usa "clave" en lugar de "clave_fiscal"
-                if 'clave' in columnas_csv and 'clave_fiscal' not in columnas_csv:
-                    map_columnas['clave'] = 'clave_fiscal'
-                    logger.info("Adaptando columna 'clave' a 'clave_fiscal'")
-                
-                for fila in lector_csv:
-                    # Adaptar nombres de columnas si es necesario
-                    if map_columnas:
-                        for col_original, col_nueva in map_columnas.items():
-                            if col_original in fila:
-                                fila[col_nueva] = fila.pop(col_original)
+                with open(ruta_archivo, 'r', encoding=encoding) as archivo:
+                    lector_csv = csv.DictReader(archivo)
                     
-                    # Verificar que estén los campos requeridos
-                    if not all(col in fila for col in CSVHandler.COLUMNAS_REQUERIDAS):
-                        logger.warning(f"Fila sin todas las columnas requeridas: {fila}")
-                        continue
+                    # Obtener las columnas del archivo CSV
+                    columnas_csv = lector_csv.fieldnames
                     
-                    # Verificar que los campos requeridos no estén vacíos
-                    if not fila['cuit'] or not fila['clave_fiscal'] or not fila['nombre']:
-                        logger.warning(f"Fila con datos incompletos ignorada: {fila}")
-                        continue
+                    # Verificar si alguna columna tiene el BOM (para utf-8)
+                    columnas_limpias = []
+                    map_columnas = {}
+                    
+                    for col in columnas_csv:
+                        # Limpiar BOM si existe
+                        col_limpia = col.replace('\ufeff', '')
+                        if col != col_limpia:
+                            map_columnas[col] = col_limpia
+                        columnas_limpias.append(col_limpia)
+                    
+                    # Verificar si el archivo usa "clave" en lugar de "clave_fiscal"
+                    if 'clave' in columnas_limpias and 'clave_fiscal' not in columnas_limpias:
+                        map_columnas['clave'] = 'clave_fiscal'
+                        logger.info("Adaptando columna 'clave' a 'clave_fiscal'")
+                    
+                    # Verificar que existan todas las columnas requeridas (o sus equivalentes)
+                    columnas_requeridas_presentes = all(
+                        col in columnas_limpias or 
+                        (col == 'clave_fiscal' and 'clave' in columnas_limpias)
+                        for col in CSVHandler.COLUMNAS_REQUERIDAS
+                    )
+                    
+                    if not columnas_requeridas_presentes:
+                        logger.warning(f"El archivo no contiene todas las columnas requeridas. Columnas encontradas: {columnas_limpias}")
+                        columnas_faltantes = [col for col in CSVHandler.COLUMNAS_REQUERIDAS 
+                                             if col not in columnas_limpias and 
+                                                not (col == 'clave_fiscal' and 'clave' in columnas_limpias)]
+                        logger.warning(f"Columnas faltantes: {columnas_faltantes}")
+                        continue  # Probar con otra codificación
+                    
+                    for fila in lector_csv:
+                        # Limpiar nombres de columnas con BOM y adaptar según mapeo
+                        fila_limpia = {}
+                        for col_original, valor in fila.items():
+                            # Determinar nombre de columna final
+                            col_final = col_original
+                            if col_original in map_columnas:
+                                col_final = map_columnas[col_original]
+                            elif col_original.replace('\ufeff', '') in map_columnas:
+                                col_final = map_columnas[col_original.replace('\ufeff', '')]
+                                
+                            # Guardar con nombre correcto
+                            fila_limpia[col_final] = valor
                         
-                    # Limpiar espacios en blanco
-                    contribuyente = {
-                        'cuit': fila['cuit'].strip(),
-                        'clave_fiscal': fila['clave_fiscal'].strip(),
-                        'nombre': fila['nombre'].strip()
-                    }
-                    
-                    # Agregar campos adicionales si existen
-                    for campo in fila:
-                        if campo not in CSVHandler.COLUMNAS_REQUERIDAS:
-                            contribuyente[campo] = fila[campo].strip()
-                    
-                    contribuyentes.append(contribuyente)
-                    
-                logger.info(f"Se cargaron {len(contribuyentes)} contribuyentes desde el archivo CSV")
+                        # Verificar que estén los campos requeridos
+                        if not all(col in fila_limpia for col in CSVHandler.COLUMNAS_REQUERIDAS):
+                            logger.warning(f"Fila sin todas las columnas requeridas: {fila_limpia}")
+                            continue
+                        
+                        # Verificar que los campos requeridos no estén vacíos
+                        if not fila_limpia['cuit'] or not fila_limpia['clave_fiscal'] or not fila_limpia['nombre']:
+                            logger.warning(f"Fila con datos incompletos ignorada: {fila_limpia}")
+                            continue
+                            
+                        # Limpiar espacios en blanco
+                        contribuyente = {
+                            'cuit': fila_limpia['cuit'].strip(),
+                            'clave_fiscal': fila_limpia['clave_fiscal'].strip(),
+                            'nombre': fila_limpia['nombre'].strip()
+                        }
+                        
+                        # Agregar campos adicionales si existen
+                        for campo in fila_limpia:
+                            if campo not in CSVHandler.COLUMNAS_REQUERIDAS and campo in fila_limpia:
+                                contribuyente[campo] = fila_limpia[campo].strip()
+                        
+                        contribuyentes.append(contribuyente)
                 
-        except Exception as e:
-            logger.error(f"Error al leer el archivo CSV: {e}")
-            
-        return contribuyentes
+                # Si llegamos aquí sin excepción y con contribuyentes, terminamos
+                if contribuyentes:
+                    logger.info(f"Se cargaron {len(contribuyentes)} contribuyentes usando codificación {encoding}")
+                    return contribuyentes
+                else:
+                    logger.warning(f"No se encontraron contribuyentes válidos con codificación {encoding}")
+                    
+            except UnicodeDecodeError:
+                logger.warning(f"Error de decodificación con {encoding}, probando otra codificación")
+            except Exception as e:
+                logger.error(f"Error al leer el archivo CSV con codificación {encoding}: {str(e)}")
+                
+        # Si llegamos aquí, no pudimos leer con ninguna codificación
+        logger.error(f"No se pudo leer el archivo CSV con ninguna de las codificaciones intentadas")
+        return []
     
     @staticmethod
     def convertir_txt_a_csv(ruta_txt, ruta_csv=None):
