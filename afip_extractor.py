@@ -1169,6 +1169,19 @@ Si el problema persiste, contacta con soporte.
         # Crear carpeta para el contribuyente dentro de la carpeta del año
         año_dir = os.path.join(self.output_folder, str(año))
         path_contribuyente = os.path.join(año_dir, nombre)
+        
+        # Verificar si ya existe la carpeta del contribuyente
+        if os.path.exists(path_contribuyente):
+            logger.info(f"Ya existe una carpeta para el contribuyente: {path_contribuyente}")
+            try:
+                # Eliminar la carpeta existente para este contribuyente específico
+                import shutil
+                shutil.rmtree(path_contribuyente)
+                logger.info(f"Carpeta anterior del contribuyente eliminada: {path_contribuyente}")
+            except Exception as e:
+                logger.error(f"Error al eliminar la carpeta anterior del contribuyente {nombre}: {e}")
+                # Continuar de todos modos
+        
         try:
             crear_estructura_carpetas(path_contribuyente)
             logger.info(f"Carpeta creada para contribuyente: {path_contribuyente}")
@@ -1397,21 +1410,13 @@ Si el problema persiste, contacta con soporte.
         año_dir = os.path.join(self.output_folder, str(año))
         if os.path.exists(año_dir):
             print(f"\nATENCIÓN: Ya existen resultados para el año {año} en: {año_dir}")
-            respuesta = input("¿Desea eliminar estos resultados y continuar? (s/n): ").strip().lower()
+            respuesta = input("¿Desea sobrescribir los resultados de los contribuyentes que procese? (s/n): ").strip().lower()
             
             if respuesta == 's' or respuesta == 'si' or respuesta == 'y' or respuesta == 'yes':
-                try:
-                    import shutil
-                    shutil.rmtree(año_dir)
-                    logger.info(f"Carpeta de resultados del año {año} eliminada: {año_dir}")
-                    print(f"Carpeta eliminada. Continuando...")
-                    return True
-                except Exception as e:
-                    logger.error(f"Error al eliminar la carpeta de resultados del año {año}: {e}")
-                    print(f"Error al eliminar la carpeta. Continuando de todos modos...")
-                    return True
+                logger.info(f"El usuario eligió sobrescribir los resultados existentes para el año {año}")
+                return True
             else:
-                logger.info(f"El usuario decidió no eliminar la carpeta de resultados del año {año}. Terminando ejecución.")
+                logger.info(f"El usuario decidió no sobrescribir los resultados existentes para el año {año}. Terminando ejecución.")
                 print("Operación cancelada por el usuario.")
                 return False
         
@@ -1484,24 +1489,63 @@ Si el problema persiste, contacta con soporte.
             contribuyentes_procesados = 0
             contribuyentes_fallidos = 0
             
+            # Diccionario para guardar los resultados de cada contribuyente
+            resultados = {}
+            
             for i, contribuyente in enumerate(contribuyentes, 1):
                 nombre = contribuyente["nombre"]
+                cuit = contribuyente["cuit"]
                 logger_usuario.info(f"Procesando contribuyente {i}/{len(contribuyentes)}: {nombre}")
                 
-                if self.procesar_contribuyente(contribuyente, año):
+                # Procesar el contribuyente
+                resultado = self.procesar_contribuyente(contribuyente, año)
+                
+                # Guardar el resultado
+                if resultado:
                     contribuyentes_procesados += 1
                     logger_usuario.info(f"✅ Contribuyente {nombre} procesado exitosamente")
+                    resultados[cuit] = {"exitoso": True}
                 else:
                     contribuyentes_fallidos += 1
                     logger_usuario.info(f"❌ Error al procesar contribuyente {nombre}")
+                    # Intentar determinar la causa del error
+                    año_dir = os.path.join(self.output_folder, str(año))
+                    path_contribuyente = os.path.join(año_dir, nombre)
+                    error_msg = "Error desconocido"
                     
+                    # Buscar archivos de error en la carpeta del contribuyente
+                    if os.path.exists(path_contribuyente):
+                        for archivo_error in ["error_login.txt", "error_timeout_login.txt", "error_login_general.txt",
+                                              "error_nuestra_parte.txt", "error_procesamiento.txt", 
+                                              "error_timeout.txt", "error_general.txt"]:
+                            ruta_error = os.path.join(path_contribuyente, archivo_error)
+                            if os.path.exists(ruta_error):
+                                try:
+                                    with open(ruta_error, 'r', encoding='utf-8') as f:
+                                        error_msg = f.read().strip()
+                                    break
+                                except Exception:
+                                    pass
+                                    
+                    resultados[cuit] = {"exitoso": False, "error": error_msg}
+                
                 # Mostrar progreso
                 print(f"Contribuyente {i}/{len(contribuyentes)} procesado: {contribuyente['nombre']}")
+            
+            # Generar informe HTML
+            ruta_html = self.generar_informe_html(año, contribuyentes, resultados)
+            
+            # Generar CSV de contribuyentes fallidos
+            ruta_csv = self.generar_csv_contribuyentes_fallidos(año, contribuyentes, resultados)
             
             # Mostrar resumen
             logger.info("==== RESUMEN DE EJECUCIÓN ====")
             logger.info(f"Contribuyentes procesados exitosamente: {contribuyentes_procesados}")
             logger.info(f"Contribuyentes con errores: {contribuyentes_fallidos}")
+            if ruta_html:
+                logger.info(f"Informe HTML generado: {ruta_html}")
+            if ruta_csv:
+                logger.info(f"CSV de contribuyentes con errores: {ruta_csv}")
             logger.info("=============================")
             
             # Registrar resumen en el log del usuario
@@ -1511,6 +1555,10 @@ Si el problema persiste, contacta con soporte.
             logger_usuario.info(f"Contribuyentes procesados exitosamente: {contribuyentes_procesados}")
             logger_usuario.info(f"Contribuyentes con errores: {contribuyentes_fallidos}")
             logger_usuario.info(f"Carpeta con los resultados: {os.path.join(self.output_folder, str(año))}")
+            if ruta_html:
+                logger_usuario.info(f"Informe HTML generado: {ruta_html}")
+            if ruta_csv:
+                logger_usuario.info(f"CSV de contribuyentes con errores: {ruta_csv}")
             logger_usuario.info("=================================")
             
             print("\n\n====================================")
@@ -1519,6 +1567,10 @@ Si el problema persiste, contacta con soporte.
             print(f"- Contribuyentes con errores: {contribuyentes_fallidos}")
             print("====================================")
             print(f"Los resultados se encuentran en la carpeta: {os.path.join(self.output_folder, str(año))}")
+            if ruta_html:
+                print(f"Informe HTML con el resumen: {ruta_html}")
+            if ruta_csv and contribuyentes_fallidos > 0:
+                print(f"CSV con contribuyentes pendientes: {ruta_csv}")
             print(f"El registro de la operación se encuentra en: {archivo_log_usuario}")
             print("====================================\n")
             
@@ -1952,6 +2004,255 @@ Si el problema persiste, contacta con soporte.
             print(f"\nNo se pudo abrir el explorador de archivos: {e}")
             print(f"Se usará el archivo predeterminado: {default_filename}")
             return os.path.join(self.directorio_actual, default_filename)
+
+    def generar_informe_html(self, año, contribuyentes, resultados):
+        """
+        Genera un informe HTML con el resultado de la ejecución y lo guarda en la carpeta de resultados.
+        
+        Args:
+            año (str): El año procesado
+            contribuyentes (list): Lista de contribuyentes procesados
+            resultados (dict): Diccionario con los resultados de cada contribuyente
+            
+        Returns:
+            str: Ruta al archivo HTML generado
+        """
+        logger.info("Generando informe HTML de resultados")
+        
+        # Ruta del archivo HTML en la carpeta del año
+        ruta_html = os.path.join(self.output_folder, str(año), "informe_resultados.html")
+        
+        try:
+            # Obtener estadísticas
+            total = len(contribuyentes)
+            exitosos = sum(1 for cuit in resultados if resultados[cuit]["exitoso"])
+            fallidos = total - exitosos
+            
+            # Generar el HTML
+            contenido_html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Informe de Extracción AFIP - Año {año}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }}
+        h1, h2, h3 {{
+            color: #2c3e50;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+        }}
+        .header {{
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 5px solid #007bff;
+        }}
+        .summary {{
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }}
+        .summary-box {{
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            flex: 1;
+            margin: 0 10px 10px 0;
+            text-align: center;
+        }}
+        .box-total {{
+            border-left: 5px solid #17a2b8;
+        }}
+        .box-success {{
+            border-left: 5px solid #28a745;
+        }}
+        .box-error {{
+            border-left: 5px solid #dc3545;
+        }}
+        .number {{
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }}
+        th, td {{
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }}
+        th {{
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }}
+        tr:hover {{
+            background-color: #f1f1f1;
+        }}
+        .success {{
+            color: #28a745;
+        }}
+        .error {{
+            color: #dc3545;
+        }}
+        .timestamp {{
+            color: #6c757d;
+            font-size: 14px;
+            margin-top: 10px;
+        }}
+        .error-details {{
+            font-size: 14px;
+            color: #6c757d;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Informe de Extracción de AFIP - Año {año}</h1>
+            <p class="timestamp">Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+        </div>
+
+        <div class="summary">
+            <div class="summary-box box-total">
+                <h3>Total de Contribuyentes</h3>
+                <div class="number">{total}</div>
+            </div>
+            <div class="summary-box box-success">
+                <h3>Procesados Exitosamente</h3>
+                <div class="number">{exitosos}</div>
+            </div>
+            <div class="summary-box box-error">
+                <h3>Con Errores</h3>
+                <div class="number">{fallidos}</div>
+            </div>
+        </div>
+
+        <h2>Detalle de Contribuyentes</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Nombre</th>
+                    <th>CUIT</th>
+                    <th>Estado</th>
+                    <th>Detalles</th>
+                </tr>
+            </thead>
+            <tbody>
+"""
+            
+            # Agregar cada contribuyente a la tabla
+            for i, contribuyente in enumerate(contribuyentes, 1):
+                cuit = contribuyente["cuit"]
+                nombre = contribuyente["nombre"]
+                
+                if cuit in resultados:
+                    resultado = resultados[cuit]
+                    estado_clase = "success" if resultado["exitoso"] else "error"
+                    estado_texto = "Exitoso" if resultado["exitoso"] else "Error"
+                    detalle = "" if resultado["exitoso"] else resultado.get("error", "Error desconocido")
+                else:
+                    estado_clase = "error"
+                    estado_texto = "No procesado"
+                    detalle = "No se intentó procesar este contribuyente"
+                
+                contenido_html += f"""                <tr>
+                    <td>{i}</td>
+                    <td>{nombre}</td>
+                    <td>{cuit}</td>
+                    <td class="{estado_clase}">{estado_texto}</td>
+                    <td class="error-details">{detalle}</td>
+                </tr>
+"""
+            
+            # Cerrar la tabla y el HTML
+            contenido_html += """            </tbody>
+        </table>
+    </div>
+</body>
+</html>"""
+            
+            # Guardar el archivo HTML
+            with open(ruta_html, 'w', encoding='utf-8') as f:
+                f.write(contenido_html)
+                
+            logger.info(f"Informe HTML generado exitosamente en: {ruta_html}")
+            return ruta_html
+            
+        except Exception as e:
+            logger.error(f"Error al generar el informe HTML: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+            
+    def generar_csv_contribuyentes_fallidos(self, año, contribuyentes, resultados):
+        """
+        Genera un archivo CSV con los contribuyentes que tuvieron problemas durante el procesamiento.
+        Este archivo tiene el mismo formato que el archivo de entrada para facilitar una nueva ejecución.
+        
+        Args:
+            año (str): El año procesado
+            contribuyentes (list): Lista de contribuyentes procesados
+            resultados (dict): Diccionario con los resultados de cada contribuyente
+            
+        Returns:
+            str: Ruta al archivo CSV generado
+        """
+        logger.info("Generando CSV de contribuyentes con errores")
+        
+        # Ruta del archivo CSV en la carpeta del año
+        ruta_csv = os.path.join(self.output_folder, str(año), "contribuyentes_pendientes.csv")
+        
+        try:
+            # Filtrar solo los contribuyentes que fallaron
+            contribuyentes_fallidos = []
+            for contribuyente in contribuyentes:
+                cuit = contribuyente["cuit"]
+                # Si no hay resultado o falló
+                if cuit not in resultados or not resultados[cuit]["exitoso"]:
+                    contribuyentes_fallidos.append(contribuyente)
+            
+            # Si no hay contribuyentes fallidos, no crear el archivo
+            if not contribuyentes_fallidos:
+                logger.info("No hay contribuyentes con errores para incluir en el CSV")
+                return None
+                
+            # Escribir el archivo CSV
+            with open(ruta_csv, 'w', encoding='utf-8', newline='') as archivo:
+                campos = ['nombre', 'cuit', 'clave_fiscal']
+                escritor = csv.DictWriter(archivo, fieldnames=campos)
+                escritor.writeheader()
+                
+                for contribuyente in contribuyentes_fallidos:
+                    # Solo incluir las columnas básicas necesarias
+                    escritor.writerow({
+                        'nombre': contribuyente['nombre'],
+                        'cuit': contribuyente['cuit'],
+                        'clave_fiscal': contribuyente['clave_fiscal']
+                    })
+                    
+            logger.info(f"CSV de contribuyentes con errores generado en: {ruta_csv}")
+            return ruta_csv
+            
+        except Exception as e:
+            logger.error(f"Error al generar el CSV de contribuyentes con errores: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos"""
