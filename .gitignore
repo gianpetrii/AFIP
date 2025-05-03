@@ -30,8 +30,9 @@ ENV/
 logs/
 
 # Downloaded files and results
-Resultados/
+AFIP_Resultados*/
 Downloads/
+
 
 # Credentials and sensitive data
 *.csv
