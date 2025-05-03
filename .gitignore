@@ -24,6 +24,8 @@ wheels/
 venv/
 env/
 ENV/
+env.bak/
+venv.bak/
 
 # Log files
 *.log
@@ -53,14 +55,59 @@ google-chrome-stable*.deb
 # OS specific files
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Distribution / packaging
 *.spec
 *.exe
 *.manifest
 *.app
-*.dmg 
+*.dmg
 
 # Except files in release directory
 !release/
-!release/** 
+!release/**
+
+# Archivos binarios y comprimidos
+*.zip
+*.tar.gz
+
+# Logs y directorios de cache
+.cache
+.pytest_cache/
+afip_extractor.log
+
+# Directorios de compilación y distribución
+dist/
+build/
+release/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Archivos de configuración
+*.spec
+
+# Archivos binarios y comprimidos
+*.exe
+*.zip
+*.tar.gz
+
+# Logs y directorios de cache
+logs/
+.cache
+.pytest_cache/
+AFIP_Resultados/
+afip_extractor.log
+
+# Archivos específicos de sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini 
