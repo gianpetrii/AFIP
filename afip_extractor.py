@@ -1237,12 +1237,17 @@ Si el problema persiste, contacta con soporte.
                 resultado_login = self.iniciar_sesion(driver, cuit, clave_fiscal)
                 if not resultado_login:
                     # Verificar si hay mensajes específicos de error en la página
-                    error_message = self.detectar_error_login(driver)
+                    error_message, error_type = self.detectar_error_login(driver)
                     
-                    if "cuit no encontrado" in error_message.lower() or "no existe" in error_message.lower():
-                        mensaje_error = f"Error: El CUIT {cuit} no existe o no está registrado en AFIP."
-                    elif "clave" in error_message.lower() or "contraseña" in error_message.lower() or "incorrecta" in error_message.lower():
+                    # Determinar el mensaje de error basado en el tipo
+                    if error_type == "cuit_invalido":
+                        mensaje_error = f"Error: El CUIT {cuit} es inválido o tiene un formato incorrecto."
+                    elif error_type == "clave_incorrecta":
                         mensaje_error = f"Error: La clave fiscal para el CUIT {cuit} es incorrecta."
+                    elif error_type == "clave_vencida":
+                        mensaje_error = f"Error: La clave fiscal para el CUIT {cuit} ha vencido y debe ser cambiada."
+                    elif "cuit no encontrado" in error_message.lower() or "no existe" in error_message.lower():
+                        mensaje_error = f"Error: El CUIT {cuit} no existe o no está registrado en AFIP."
                     elif "captcha" in error_message.lower():
                         mensaje_error = "Error: No se pudo resolver el captcha de AFIP."
                     elif "bloqueado" in error_message.lower() or "inhabilitado" in error_message.lower():
@@ -1252,36 +1257,40 @@ Si el problema persiste, contacta con soporte.
                     elif "servicio" in error_message.lower() or "disponible" in error_message.lower():
                         mensaje_error = "Error: El servicio de AFIP no está disponible en este momento. Intente más tarde."
                     else:
-                        mensaje_error = "Error al iniciar sesión. Verifique las credenciales (CUIT y clave fiscal)."
+                        mensaje_error = f"Error al iniciar sesión: {error_message}"
                     
-                    with open(os.path.join(path_contribuyente, "error_login.txt"), "w") as f:
+                    # Guardar el mensaje de error en un archivo
+                    error_file_name = f"error_{error_type}.txt" if error_type != "otro" else "error_login.txt"
+                    with open(os.path.join(path_contribuyente, error_file_name), "w", encoding='utf-8') as f:
                         f.write(mensaje_error)
                     
                     logger.error(f"Error al iniciar sesión para {nombre}: {error_message}")
                     logger_usuario.info(f"{mensaje_error}")
                     print(f"{mensaje_error}")
                     print(f"Continuando con el siguiente contribuyente...")
-                    return False
+                    
+                    # Guardar el tipo de error para mostrar en el informe
+                    return {"exitoso": False, "tipo_error": error_type, "mensaje_error": mensaje_error}
             except TimeoutException:
                 mensaje_error = "Error: La página de AFIP tardó demasiado en responder durante el inicio de sesión."
-                with open(os.path.join(path_contribuyente, "error_timeout_login.txt"), "w") as f:
+                with open(os.path.join(path_contribuyente, "error_timeout_login.txt"), "w", encoding='utf-8') as f:
                     f.write(mensaje_error)
                 
                 logger.error(f"Timeout durante el inicio de sesión para {nombre}")
                 logger_usuario.info(mensaje_error)
                 print(mensaje_error)
                 print(f"Continuando con el siguiente contribuyente...")
-                return False
+                return {"exitoso": False, "tipo_error": "timeout", "mensaje_error": mensaje_error}
             except Exception as e:
                 mensaje_error = f"Error durante el inicio de sesión: {e}"
-                with open(os.path.join(path_contribuyente, "error_login_general.txt"), "w") as f:
+                with open(os.path.join(path_contribuyente, "error_login_general.txt"), "w", encoding='utf-8') as f:
                     f.write(mensaje_error)
                 
                 logger.error(f"Error general durante el inicio de sesión para {nombre}: {e}")
                 logger_usuario.info(mensaje_error)
                 print(mensaje_error)
                 print(f"Continuando con el siguiente contribuyente...")
-                return False
+                return {"exitoso": False, "tipo_error": "general", "mensaje_error": mensaje_error}
             
             # Procesar Nuestra Parte
             check_timeout()  # Verificar timeout antes de procesar
@@ -1294,46 +1303,46 @@ Si el problema persiste, contacta con soporte.
                     logger.info(f"Procesamiento de {nombre} completado exitosamente")
                     logger_usuario.info(f"Información fiscal del año {año} procesada exitosamente para {nombre}")
                     print(f"Procesamiento de {nombre} completado exitosamente")
-                    return True
+                    return {"exitoso": True}
                 else:
                     mensaje_error = f"No se pudo obtener la información fiscal del año {año} para {nombre}"
-                    with open(os.path.join(path_contribuyente, "error_nuestra_parte.txt"), "w") as f:
+                    with open(os.path.join(path_contribuyente, "error_nuestra_parte.txt"), "w", encoding='utf-8') as f:
                         f.write(mensaje_error)
                     
                     logger.warning(f"No se pudo procesar Nuestra Parte para {nombre}")
                     logger_usuario.info(mensaje_error)
                     print(mensaje_error)
                     print(f"Continuando con el siguiente contribuyente...")
-                    return False
+                    return {"exitoso": False, "tipo_error": "nuestra_parte", "mensaje_error": mensaje_error}
             except Exception as e:
                 mensaje_error = f"Error al procesar la información fiscal: {e}"
-                with open(os.path.join(path_contribuyente, "error_procesamiento.txt"), "w") as f:
+                with open(os.path.join(path_contribuyente, "error_procesamiento.txt"), "w", encoding='utf-8') as f:
                     f.write(mensaje_error)
                 
                 logger.error(f"Error al procesar Nuestra Parte para {nombre}: {e}")
                 logger_usuario.info(mensaje_error)
                 print(mensaje_error)
                 print(f"Continuando con el siguiente contribuyente...")
-                return False
+                return {"exitoso": False, "tipo_error": "procesamiento", "mensaje_error": mensaje_error}
                 
         except ContribuyenteTimeoutError:
             mensaje_error = f"Se excedió el tiempo máximo de {self.contribuyente_timeout} segundos para procesar este contribuyente."
-            with open(os.path.join(path_contribuyente, "error_timeout.txt"), "w") as f:
+            with open(os.path.join(path_contribuyente, "error_timeout.txt"), "w", encoding='utf-8') as f:
                 f.write(f"Error: {mensaje_error}")
             
             logger.error(f"Timeout: {mensaje_error}")
             logger_usuario.info(f"Se excedió el tiempo máximo de procesamiento para {nombre}. El proceso se interrumpió por seguridad.")
             print(f"Timeout: Se excedió el tiempo máximo al procesar {nombre}. Continuando con el siguiente contribuyente...")
-            return False
+            return {"exitoso": False, "tipo_error": "timeout_general", "mensaje_error": mensaje_error}
         except Exception as e:
             mensaje_error = f"Error inesperado: {e}"
-            with open(os.path.join(path_contribuyente, "error_general.txt"), "w") as f:
+            with open(os.path.join(path_contribuyente, "error_general.txt"), "w", encoding='utf-8') as f:
                 f.write(mensaje_error)
             
             logger.error(f"Error general procesando {nombre}: {e}")
             logger_usuario.info(f"Error inesperado al procesar {nombre}: {e}")
             print(f"Error procesando {nombre}: {e}. Continuando con el siguiente contribuyente...")
-            return False
+            return {"exitoso": False, "tipo_error": "error_general", "mensaje_error": mensaje_error}
         finally:
             # Cancelar el timer si aún está activo
             if timer and timer.is_alive():
@@ -1355,10 +1364,37 @@ Si el problema persiste, contacta con soporte.
             driver: WebDriver de Selenium
             
         Returns:
-            str: Mensaje de error detectado o string vacío si no se detecta error
+            tuple: (Mensaje de error detectado, Tipo de error)
+                  Tipos de error: "cuit_invalido", "clave_incorrecta", "clave_vencida", "otro"
         """
         try:
-            # Intentar encontrar elementos de error conocidos
+            # Verificar primero si estamos en la página de cambio de clave forzado
+            # Este es el caso cuando la clave fiscal ha vencido
+            if "cambioClaveForzado" in driver.current_url:
+                try:
+                    mensaje_elem = driver.find_element(By.ID, "F1:msg")
+                    if mensaje_elem and "cambiar tu contraseña" in mensaje_elem.text:
+                        return f"Clave fiscal vencida: {mensaje_elem.text}", "clave_vencida"
+                except Exception:
+                    pass
+            
+            # Verificar errores en la pantalla de login
+            try:
+                mensaje_elem = driver.find_element(By.ID, "F1:msg")
+                if mensaje_elem:
+                    mensaje = mensaje_elem.text.strip()
+                    
+                    # Determinar el tipo de error basado en el mensaje
+                    if "CUIL/CUIT incorrecto" in mensaje:
+                        return f"CUIT inválido: {mensaje}", "cuit_invalido"
+                    elif "Clave o usuario incorrecto" in mensaje:
+                        return f"Clave fiscal incorrecta: {mensaje}", "clave_incorrecta"
+                    else:
+                        return mensaje, "otro"
+            except Exception:
+                pass
+            
+            # Intentar encontrar otros elementos de error conocidos
             error_selectors = [
                 "div.mensajeError",
                 "div.error",
@@ -1373,18 +1409,18 @@ Si el problema persiste, contacta con soporte.
                     error_elements = driver.find_elements(By.CSS_SELECTOR, selector)
                     for error_element in error_elements:
                         if error_element.is_displayed() and error_element.text.strip():
-                            return error_element.text.strip()
+                            return error_element.text.strip(), "otro"
                 except:
                     continue
             
             # Si no se encontró un mensaje de error específico, verificar el título de la página
             # para dar una pista sobre el problema
             if "error" in driver.title.lower() or "problema" in driver.title.lower():
-                return f"Error en la página: {driver.title}"
+                return f"Error en la página: {driver.title}", "otro"
                 
-            return ""
+            return "", "ninguno"
         except:
-            return "Error desconocido durante el inicio de sesión"
+            return "Error desconocido durante el inicio de sesión", "otro"
     
     def verificar_carpeta_resultados(self, año):
         """
@@ -1501,33 +1537,69 @@ Si el problema persiste, contacta con soporte.
                 resultado = self.procesar_contribuyente(contribuyente, año)
                 
                 # Guardar el resultado
-                if resultado:
-                    contribuyentes_procesados += 1
-                    logger_usuario.info(f"✅ Contribuyente {nombre} procesado exitosamente")
-                    resultados[cuit] = {"exitoso": True}
+                if isinstance(resultado, dict):
+                    # Nuevo formato de retorno
+                    resultados[cuit] = resultado
+                    if resultado["exitoso"]:
+                        contribuyentes_procesados += 1
+                        logger_usuario.info(f"✅ Contribuyente {nombre} procesado exitosamente")
+                    else:
+                        contribuyentes_fallidos += 1
+                        logger_usuario.info(f"❌ Error al procesar contribuyente {nombre}: {resultado.get('mensaje_error', 'Error desconocido')}")
                 else:
-                    contribuyentes_fallidos += 1
-                    logger_usuario.info(f"❌ Error al procesar contribuyente {nombre}")
-                    # Intentar determinar la causa del error
-                    año_dir = os.path.join(self.output_folder, str(año))
-                    path_contribuyente = os.path.join(año_dir, nombre)
-                    error_msg = "Error desconocido"
-                    
-                    # Buscar archivos de error en la carpeta del contribuyente
-                    if os.path.exists(path_contribuyente):
-                        for archivo_error in ["error_login.txt", "error_timeout_login.txt", "error_login_general.txt",
-                                              "error_nuestra_parte.txt", "error_procesamiento.txt", 
-                                              "error_timeout.txt", "error_general.txt"]:
-                            ruta_error = os.path.join(path_contribuyente, archivo_error)
-                            if os.path.exists(ruta_error):
-                                try:
-                                    with open(ruta_error, 'r', encoding='utf-8') as f:
-                                        error_msg = f.read().strip()
-                                    break
-                                except Exception:
-                                    pass
+                    # Formato antiguo (booleano) por compatibilidad
+                    if resultado:
+                        contribuyentes_procesados += 1
+                        logger_usuario.info(f"✅ Contribuyente {nombre} procesado exitosamente")
+                        resultados[cuit] = {"exitoso": True}
+                    else:
+                        contribuyentes_fallidos += 1
+                        logger_usuario.info(f"❌ Error al procesar contribuyente {nombre}")
+                        
+                        # Intentar determinar la causa del error
+                        año_dir = os.path.join(self.output_folder, str(año))
+                        path_contribuyente = os.path.join(año_dir, nombre)
+                        error_msg = "Error desconocido"
+                        tipo_error = "otro"
+                        
+                        # Buscar archivos de error en la carpeta del contribuyente
+                        if os.path.exists(path_contribuyente):
+                            # Buscar por tipos de error conocidos primero
+                            for error_type in ["cuit_invalido", "clave_incorrecta", "clave_vencida"]:
+                                ruta_error = os.path.join(path_contribuyente, f"error_{error_type}.txt")
+                                if os.path.exists(ruta_error):
+                                    try:
+                                        with open(ruta_error, 'r', encoding='utf-8') as f:
+                                            error_msg = f.read().strip()
+                                        tipo_error = error_type
+                                        break
+                                    except Exception:
+                                        pass
+                            
+                            # Si no encontramos por tipo, buscar los archivos de error genéricos
+                            if tipo_error == "otro":
+                                for archivo_error in ["error_login.txt", "error_timeout_login.txt", "error_login_general.txt",
+                                                  "error_nuestra_parte.txt", "error_procesamiento.txt", 
+                                                  "error_timeout.txt", "error_general.txt"]:
+                                    ruta_error = os.path.join(path_contribuyente, archivo_error)
+                                    if os.path.exists(ruta_error):
+                                        try:
+                                            with open(ruta_error, 'r', encoding='utf-8') as f:
+                                                error_msg = f.read().strip()
+                                            # Determinar tipo de error por el nombre del archivo
+                                            if "timeout" in archivo_error:
+                                                tipo_error = "timeout"
+                                            elif "login" in archivo_error:
+                                                tipo_error = "login"
+                                            elif "nuestra_parte" in archivo_error:
+                                                tipo_error = "nuestra_parte"
+                                            elif "procesamiento" in archivo_error:
+                                                tipo_error = "procesamiento"
+                                            break
+                                        except Exception:
+                                            pass
                                     
-                    resultados[cuit] = {"exitoso": False, "error": error_msg}
+                        resultados[cuit] = {"exitoso": False, "tipo_error": tipo_error, "mensaje_error": error_msg}
                 
                 # Mostrar progreso
                 print(f"Contribuyente {i}/{len(contribuyentes)} procesado: {contribuyente['nombre']}")
@@ -2028,6 +2100,25 @@ Si el problema persiste, contacta con soporte.
             exitosos = sum(1 for cuit in resultados if resultados[cuit]["exitoso"])
             fallidos = total - exitosos
             
+            # Contabilizar tipos de error
+            errores_por_tipo = {
+                "cuit_invalido": 0,
+                "clave_incorrecta": 0,
+                "clave_vencida": 0,
+                "timeout": 0,
+                "nuestra_parte": 0,
+                "procesamiento": 0,
+                "otro": 0
+            }
+            
+            for cuit in resultados:
+                if not resultados[cuit]["exitoso"] and "tipo_error" in resultados[cuit]:
+                    tipo_error = resultados[cuit]["tipo_error"]
+                    if tipo_error in errores_por_tipo:
+                        errores_por_tipo[tipo_error] += 1
+                    else:
+                        errores_por_tipo["otro"] += 1
+            
             # Generar el HTML
             contenido_html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -2108,6 +2199,21 @@ Si el problema persiste, contacta con soporte.
         .error {{
             color: #dc3545;
         }}
+        .error-cuit {{
+            color: #e74c3c;
+        }}
+        .error-clave {{
+            color: #d35400;
+        }}
+        .error-vencida {{
+            color: #8e44ad;
+        }}
+        .error-timeout {{
+            color: #c0392b;
+        }}
+        .error-sistema {{
+            color: #7f8c8d;
+        }}
         .timestamp {{
             color: #6c757d;
             font-size: 14px;
@@ -2116,6 +2222,40 @@ Si el problema persiste, contacta con soporte.
         .error-details {{
             font-size: 14px;
             color: #6c757d;
+        }}
+        .error-summary {{
+            margin-top: 30px;
+            margin-bottom: 30px;
+        }}
+        .error-summary h3 {{
+            margin-bottom: 15px;
+        }}
+        .pill {{
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: white;
+        }}
+        .pill-cuit {{
+            background-color: #e74c3c;
+        }}
+        .pill-clave {{
+            background-color: #d35400;
+        }}
+        .pill-vencida {{
+            background-color: #8e44ad;
+        }}
+        .pill-timeout {{
+            background-color: #c0392b;
+        }}
+        .pill-sistema {{
+            background-color: #7f8c8d;
+        }}
+        .pill-otro {{
+            background-color: #34495e;
         }}
     </style>
 </head>
@@ -2140,7 +2280,35 @@ Si el problema persiste, contacta con soporte.
                 <div class="number">{fallidos}</div>
             </div>
         </div>
+"""
 
+            # Añadir resumen de errores si hay fallidos
+            if fallidos > 0:
+                contenido_html += """
+        <div class="error-summary">
+            <h3>Resumen de Errores</h3>
+            <div>
+"""
+                # Añadir pills para cada tipo de error si hay alguno
+                if errores_por_tipo["cuit_invalido"] > 0:
+                    contenido_html += f'                <span class="pill pill-cuit">CUIT inválido: {errores_por_tipo["cuit_invalido"]}</span>\n'
+                if errores_por_tipo["clave_incorrecta"] > 0:
+                    contenido_html += f'                <span class="pill pill-clave">Clave incorrecta: {errores_por_tipo["clave_incorrecta"]}</span>\n'
+                if errores_por_tipo["clave_vencida"] > 0:
+                    contenido_html += f'                <span class="pill pill-vencida">Clave vencida: {errores_por_tipo["clave_vencida"]}</span>\n'
+                if errores_por_tipo["timeout"] > 0:
+                    contenido_html += f'                <span class="pill pill-timeout">Timeout: {errores_por_tipo["timeout"]}</span>\n'
+                if errores_por_tipo["nuestra_parte"] + errores_por_tipo["procesamiento"] > 0:
+                    suma = errores_por_tipo["nuestra_parte"] + errores_por_tipo["procesamiento"]
+                    contenido_html += f'                <span class="pill pill-sistema">Errores del sistema: {suma}</span>\n'
+                if errores_por_tipo["otro"] > 0:
+                    contenido_html += f'                <span class="pill pill-otro">Otros errores: {errores_por_tipo["otro"]}</span>\n'
+                    
+                contenido_html += """            </div>
+        </div>
+"""
+
+            contenido_html += """
         <h2>Detalle de Contribuyentes</h2>
         <table>
             <thead>
@@ -2162,9 +2330,34 @@ Si el problema persiste, contacta con soporte.
                 
                 if cuit in resultados:
                     resultado = resultados[cuit]
-                    estado_clase = "success" if resultado["exitoso"] else "error"
-                    estado_texto = "Exitoso" if resultado["exitoso"] else "Error"
-                    detalle = "" if resultado["exitoso"] else resultado.get("error", "Error desconocido")
+                    if resultado["exitoso"]:
+                        estado_clase = "success"
+                        estado_texto = "Exitoso"
+                        detalle = ""
+                    else:
+                        # Determinar la clase CSS según el tipo de error
+                        tipo_error = resultado.get("tipo_error", "otro")
+                        
+                        if tipo_error == "cuit_invalido":
+                            estado_clase = "error-cuit"
+                            estado_texto = "CUIT inválido"
+                        elif tipo_error == "clave_incorrecta":
+                            estado_clase = "error-clave"
+                            estado_texto = "Clave incorrecta"
+                        elif tipo_error == "clave_vencida":
+                            estado_clase = "error-vencida"
+                            estado_texto = "Clave vencida"
+                        elif tipo_error == "timeout" or tipo_error == "timeout_general":
+                            estado_clase = "error-timeout"
+                            estado_texto = "Timeout"
+                        elif tipo_error in ["nuestra_parte", "procesamiento"]:
+                            estado_clase = "error-sistema"
+                            estado_texto = "Error del sistema"
+                        else:
+                            estado_clase = "error"
+                            estado_texto = "Error"
+                            
+                        detalle = resultado.get("mensaje_error", "Error desconocido")
                 else:
                     estado_clase = "error"
                     estado_texto = "No procesado"
@@ -2201,8 +2394,7 @@ Si el problema persiste, contacta con soporte.
             
     def generar_csv_contribuyentes_fallidos(self, año, contribuyentes, resultados):
         """
-        Genera un archivo CSV con los contribuyentes que tuvieron problemas durante el procesamiento.
-        Este archivo tiene el mismo formato que el archivo de entrada para facilitar una nueva ejecución.
+        Genera un archivo CSV con los contribuyentes que tuvieron errores durante el procesamiento.
         
         Args:
             año (str): El año procesado
@@ -2215,37 +2407,115 @@ Si el problema persiste, contacta con soporte.
         logger.info("Generando CSV de contribuyentes con errores")
         
         # Ruta del archivo CSV en la carpeta del año
-        ruta_csv = os.path.join(self.output_folder, str(año), "contribuyentes_pendientes.csv")
+        ruta_csv = os.path.join(self.output_folder, str(año), "contribuyentes_fallidos.csv")
         
         try:
-            # Filtrar solo los contribuyentes que fallaron
-            contribuyentes_fallidos = []
+            # Crear lista de contribuyentes con errores, agrupados por tipo de error
+            contribuyentes_por_tipo = {
+                # Errores principales que se pueden arreglar
+                "cuit_invalido": [],
+                "clave_incorrecta": [],
+                "clave_vencida": [],
+                
+                # Otros errores (puede ser útil separarlos)
+                "timeout": [],
+                "nuestra_parte": [],
+                "procesamiento": [],
+                "otro": []
+            }
+            
             for contribuyente in contribuyentes:
                 cuit = contribuyente["cuit"]
-                # Si no hay resultado o falló
-                if cuit not in resultados or not resultados[cuit]["exitoso"]:
-                    contribuyentes_fallidos.append(contribuyente)
-            
-            # Si no hay contribuyentes fallidos, no crear el archivo
-            if not contribuyentes_fallidos:
-                logger.info("No hay contribuyentes con errores para incluir en el CSV")
-                return None
                 
-            # Escribir el archivo CSV
-            with open(ruta_csv, 'w', encoding='utf-8', newline='') as archivo:
-                campos = ['nombre', 'cuit', 'clave_fiscal']
-                escritor = csv.DictWriter(archivo, fieldnames=campos)
-                escritor.writeheader()
-                
-                for contribuyente in contribuyentes_fallidos:
-                    # Solo incluir las columnas básicas necesarias
-                    escritor.writerow({
-                        'nombre': contribuyente['nombre'],
-                        'cuit': contribuyente['cuit'],
-                        'clave_fiscal': contribuyente['clave_fiscal']
-                    })
+                if cuit in resultados:
+                    resultado = resultados[cuit]
                     
-            logger.info(f"CSV de contribuyentes con errores generado en: {ruta_csv}")
+                    if not resultado["exitoso"]:
+                        # Obtener el tipo de error o 'otro' si no está definido
+                        tipo_error = resultado.get("tipo_error", "otro")
+                        
+                        # Asignar a la categoría correspondiente
+                        if tipo_error in contribuyentes_por_tipo:
+                            contribuyentes_por_tipo[tipo_error].append(contribuyente)
+                        else:
+                            contribuyentes_por_tipo["otro"].append(contribuyente)
+            
+            # Ordenar por tipo de error para facilitar corrección 
+            # (primero los que el usuario puede corregir fácilmente)
+            fallidos = []
+            fallidos.extend(contribuyentes_por_tipo["cuit_invalido"])
+            fallidos.extend(contribuyentes_por_tipo["clave_incorrecta"])
+            fallidos.extend(contribuyentes_por_tipo["clave_vencida"])
+            fallidos.extend(contribuyentes_por_tipo["timeout"])
+            fallidos.extend(contribuyentes_por_tipo["nuestra_parte"])
+            fallidos.extend(contribuyentes_por_tipo["procesamiento"])
+            fallidos.extend(contribuyentes_por_tipo["otro"])
+            
+            # Si no hay contribuyentes fallidos, no generar el archivo
+            if not fallidos:
+                logger.info("No hay contribuyentes con errores para generar el CSV")
+                return None
+            
+            # Crear una cabecera explicativa con información sobre los tipos de error
+            with open(ruta_csv, 'w', encoding='utf-8', newline='') as file:
+                writer = csv.writer(file)
+                
+                # Cabecera estándar - como el archivo original
+                writer.writerow(["nombre", "cuit", "clave_fiscal"])
+                
+                # Escribir contribuyentes fallidos
+                for contribuyente in fallidos:
+                    writer.writerow([
+                        contribuyente["nombre"],
+                        contribuyente["cuit"],
+                        contribuyente["clave_fiscal"]
+                    ])
+            
+            # Añadir también un archivo README con explicaciones
+            ruta_readme = os.path.join(self.output_folder, str(año), "README_ERRORES.txt")
+            with open(ruta_readme, 'w', encoding='utf-8') as file:
+                file.write(f"# INFORMACIÓN SOBRE ERRORES - AÑO {año}\n\n")
+                file.write("El archivo 'contribuyentes_fallidos.csv' contiene los contribuyentes que tuvieron errores durante el procesamiento.\n")
+                file.write("Los contribuyentes están ordenados por tipo de error para facilitar su corrección.\n\n")
+                
+                file.write("## TIPOS DE ERROR:\n\n")
+                
+                if contribuyentes_por_tipo["cuit_invalido"]:
+                    file.write(f"1. CUIT INVÁLIDO ({len(contribuyentes_por_tipo['cuit_invalido'])} contribuyentes):\n")
+                    file.write("   - El CUIT ingresado no es válido o tiene un formato incorrecto.\n")
+                    file.write("   - Verifique que el CUIT esté correctamente escrito y tenga 11 dígitos.\n\n")
+                
+                if contribuyentes_por_tipo["clave_incorrecta"]:
+                    file.write(f"2. CLAVE FISCAL INCORRECTA ({len(contribuyentes_por_tipo['clave_incorrecta'])} contribuyentes):\n")
+                    file.write("   - La clave fiscal ingresada no corresponde al CUIT.\n")
+                    file.write("   - Verifique que la clave fiscal esté correctamente escrita.\n\n")
+                
+                if contribuyentes_por_tipo["clave_vencida"]:
+                    file.write(f"3. CLAVE FISCAL VENCIDA ({len(contribuyentes_por_tipo['clave_vencida'])} contribuyentes):\n")
+                    file.write("   - La clave fiscal del contribuyente ha vencido y debe ser cambiada.\n")
+                    file.write("   - Ingrese manualmente a AFIP con este CUIT y cambie la clave fiscal.\n\n")
+                
+                if contribuyentes_por_tipo["timeout"]:
+                    file.write(f"4. TIMEOUT ({len(contribuyentes_por_tipo['timeout'])} contribuyentes):\n")
+                    file.write("   - El procesamiento tomó demasiado tiempo y fue interrumpido.\n")
+                    file.write("   - Intente ejecutar el proceso nuevamente cuando la conexión sea más estable.\n\n")
+                
+                if contribuyentes_por_tipo["nuestra_parte"] or contribuyentes_por_tipo["procesamiento"]:
+                    suma = len(contribuyentes_por_tipo["nuestra_parte"]) + len(contribuyentes_por_tipo["procesamiento"])
+                    file.write(f"5. ERRORES DEL SISTEMA AFIP ({suma} contribuyentes):\n")
+                    file.write("   - Hubo problemas al acceder o procesar la información en el sistema de AFIP.\n")
+                    file.write("   - Estos errores pueden ser temporales. Intente nuevamente más tarde.\n\n")
+                
+                if contribuyentes_por_tipo["otro"]:
+                    file.write(f"6. OTROS ERRORES ({len(contribuyentes_por_tipo['otro'])} contribuyentes):\n")
+                    file.write("   - Errores no clasificados específicamente.\n")
+                    file.write("   - Consulte el informe HTML para más detalles sobre cada error.\n\n")
+                    
+                file.write("\nNota: Puede usar el archivo 'contribuyentes_fallidos.csv' como entrada para una nueva ejecución\n")
+                file.write("después de corregir los problemas identificados.\n")
+            
+            logger.info(f"CSV de contribuyentes con errores generado exitosamente en: {ruta_csv}")
+            logger.info(f"README de errores generado en: {ruta_readme}")
             return ruta_csv
             
         except Exception as e:
