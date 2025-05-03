@@ -60,3 +60,7 @@ Thumbs.db
 *.manifest
 *.app
 *.dmg 
+
+# Except files in release directory
+!release/
+!release/** 
