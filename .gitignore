@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.zip
 
 # Virtual environment
 venv/
@@ -40,7 +41,6 @@ Downloads/
 *.csv
 *.xlsx
 *.xlsx:Zone.Identifier
-PONER LISTADO AQUI/
 
 # Chrome driver
 chromedriver*/
