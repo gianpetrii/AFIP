@@ -1,0 +1,4 @@
+# Requerimientos para AFIP Extractor - Versión Windows
+selenium>=4.15.2  # Para la automatización del navegador
+webdriver-manager>=4.0.1  # Para gestionar el webdriver
+Pillow>=10.1.0  # Para procesamiento de imágenes 

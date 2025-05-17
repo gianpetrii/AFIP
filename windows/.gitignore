@@ -1,0 +1,72 @@
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.zip
+
+# Virtual environment
+win_env/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Log files
+*.log
+logs/
+
+# Downloaded files and results
+AFIP_Resultados*/
+Downloads/
+
+# Credentials and sensitive data
+*.csv
+*.xlsx
+*.xlsx:Zone.Identifier
+
+# Chrome driver
+chromedriver*/
+google-chrome-stable*.deb
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Distribution / packaging
+*.spec
+*.exe
+*.manifest
+*.app
+*.dmg
+
+# Except files in release directory
+!release/
+!release/**
+
+# Except example files
+!clientes_ejemplo.csv 
