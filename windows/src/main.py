@@ -12,6 +12,7 @@ import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from datetime import datetime
 
 # Agregar el directorio padre al path para poder importar utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,9 +48,13 @@ class AFIPExtractorApp:
         # Variables para almacenar datos
         self.csv_file_path = tk.StringVar()
         self.contribuyentes = []
+        self.anio = tk.StringVar(value=str(datetime.now().year))  # Año actual por defecto
+        self.sobrescribir = tk.BooleanVar(value=False)
+        self.output_dir = tk.StringVar()
         
         # Directorio de trabajo (donde se guardarán los resultados)
         self.working_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.output_dir.set(self.working_dir)  # Directorio de trabajo por defecto
         
         # Configurar la interfaz
         self._setup_ui()
@@ -73,7 +78,7 @@ class AFIPExtractorApp:
         header_frame.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Label(header_frame, text="AFIP Nuestra Parte Extractor", style="Header.TLabel").pack()
-        ttk.Label(header_frame, text="Seleccione un archivo CSV con los datos de los contribuyentes").pack()
+        ttk.Label(header_frame, text="Seleccione un archivo CSV").pack()
         ttk.Label(header_frame, text="El archivo debe tener tres columnas: Contribuyente, CUIT y Clave Fiscal").pack()
         
         # Frame para selección de archivo
@@ -90,7 +95,32 @@ class AFIPExtractorApp:
         browse_button = ttk.Button(file_frame, text="Explorar...", command=self._browse_csv_file)
         browse_button.grid(row=0, column=2, padx=5)
         
-        file_frame.columnconfigure(1, weight=1)  # Hacer que el entry se expanda
+        # Frame para configuración adicional
+        config_frame = ttk.Frame(main_frame, padding="10")
+        config_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # Año a analizar
+        ttk.Label(config_frame, text="Año a analizar:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        entry_anio = ttk.Entry(config_frame, textvariable=self.anio, width=6)
+        entry_anio.grid(row=0, column=1, sticky=tk.W, padx=5)
+        
+        # Opción de sobrescribir
+        check_sobrescribir = ttk.Checkbutton(
+            config_frame, 
+            text="Sobrescribir archivos existentes",
+            variable=self.sobrescribir
+        )
+        check_sobrescribir.grid(row=0, column=2, sticky=tk.W, padx=20)
+        
+        # Directorio de resultados
+        ttk.Label(config_frame, text="Directorio de resultados:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        entry_output = ttk.Entry(config_frame, textvariable=self.output_dir, width=50)
+        entry_output.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        browse_output_button = ttk.Button(config_frame, text="Explorar...", command=self._browse_output_dir)
+        browse_output_button.grid(row=1, column=3, padx=5, pady=5)
+        
+        config_frame.columnconfigure(1, weight=1)  # Hacer que el entry se expanda
         
         # Frame para mostrar información y acciones
         info_frame = ttk.Frame(main_frame, padding="10")
@@ -124,6 +154,10 @@ class AFIPExtractorApp:
         # Botón para crear archivo de ejemplo
         example_button = ttk.Button(action_frame, text="Crear Archivo de Ejemplo", command=self._create_example_file)
         example_button.pack(side=tk.LEFT, padx=5)
+        
+        # Botón para procesar contribuyentes
+        process_button = ttk.Button(action_frame, text="Procesar Contribuyentes", command=self._process_contribuyentes)
+        process_button.pack(side=tk.LEFT, padx=5)
         
         # Área de estado
         self.status_var = tk.StringVar()
@@ -227,6 +261,74 @@ class AFIPExtractorApp:
                 error_msg = f"Error al crear archivo de ejemplo: {e}"
                 logger.error(error_msg)
                 messagebox.showerror("Error", error_msg)
+    
+    def _browse_output_dir(self):
+        """Abre un diálogo para seleccionar el directorio de resultados"""
+        dirname = filedialog.askdirectory(
+            title="Seleccionar directorio de resultados",
+            initialdir=self.output_dir.get()
+        )
+        
+        if dirname:
+            self.output_dir.set(dirname)
+            logger.info(f"Directorio de resultados seleccionado: {dirname}")
+            self.status_var.set(f"Directorio de resultados: {dirname}")
+    
+    def _process_contribuyentes(self):
+        """Procesa los contribuyentes con las opciones seleccionadas"""
+        if not self.contribuyentes:
+            messagebox.showwarning("Advertencia", "Por favor, cargue los contribuyentes primero.")
+            return
+            
+        # Validar el año
+        try:
+            año = int(self.anio.get())
+            if año < 2018 or año > datetime.now().year:
+                messagebox.showerror(
+                    "Error", 
+                    f"El año debe estar entre 2018 y {datetime.now().year}"
+                )
+                return
+        except ValueError:
+            messagebox.showerror("Error", "El año debe ser un número válido.")
+            return
+            
+        # Validar directorio de resultados
+        output_dir = self.output_dir.get()
+        if not output_dir:
+            messagebox.showerror("Error", "Por favor, seleccione un directorio para los resultados.")
+            return
+            
+        # Crear el extractor
+        extractor = NuestraParteExtractor()
+        
+        # Configurar opciones
+        extractor.output_folder = output_dir
+        
+        # Procesar contribuyentes
+        try:
+            self.status_var.set("Procesando contribuyentes...")
+            self.root.update()
+            
+            # Ejecutar el procesamiento
+            extractor.ejecutar(
+                año=str(año),
+                csv_file=self.csv_file_path.get(),
+                sobrescribir=self.sobrescribir.get()
+            )
+            
+            self.status_var.set("Procesamiento completado")
+            messagebox.showinfo(
+                "Completado",
+                f"Se ha completado el procesamiento de {len(self.contribuyentes)} contribuyentes.\n"
+                f"Los resultados se encuentran en: {output_dir}"
+            )
+            
+        except Exception as e:
+            error_msg = f"Error durante el procesamiento: {e}"
+            logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+            self.status_var.set("Error durante el procesamiento")
 
 def main():
     """Función principal que inicia la aplicación"""

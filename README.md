@@ -2,24 +2,51 @@
 
 Herramienta que automatiza la extracción de información de la sección "Nuestra Parte" del sitio web de AFIP (Administración Federal de Ingresos Públicos de Argentina).
 
-## Descripción
+## Nueva estructura del proyecto
 
-AFIP Nuestra Parte Extractor es una herramienta simplificada que se enfoca específicamente en extraer información de la sección "Nuestra Parte" del portal de AFIP. Esta sección muestra detalles importantes sobre la situación fiscal del contribuyente.
+Este proyecto ahora se ha reorganizado en dos versiones separadas:
+
+- **Versión Windows**: Interfaz gráfica optimizada para usuarios de Windows
+- **Versión Linux**: Interfaz adaptada para entornos Linux
+
+Elija la carpeta correspondiente a su sistema operativo:
+
+- [Versión Windows](./windows/README.md)
+- [Versión Linux](./linux/README.md)
+
+## Descripción general
+
+AFIP Nuestra Parte Extractor es una herramienta que se enfoca específicamente en extraer información de la sección "Nuestra Parte" del portal de AFIP. Esta sección muestra detalles importantes sobre la situación fiscal del contribuyente.
 
 La herramienta:
 - Inicia sesión automáticamente en el portal de AFIP
 - Navega directamente a la sección "Nuestra Parte"
 - Extrae y guarda en PDF las tablas de información disponibles
 - Organiza los resultados por contribuyente en carpetas separadas
-- Detecta y evita guardar duplicados para optimizar el proceso
 
-## Requisitos
+## Requisitos generales
 
 - Python 3.7 o superior
 - Google Chrome instalado
 - Conexión a Internet
-- Sistema operativo Windows, Linux o macOS
-- Chromedriver compatible con su versión de Chrome
+
+## Estructura del archivo de entrada
+
+El programa utiliza un archivo CSV con el siguiente formato:
+
+```
+nombre,cuit,clave_fiscal
+"Nombre Apellido","20123456789","contraseña"
+```
+
+Cada línea debe contener:
+- **nombre**: Nombre completo del contribuyente (se usará para crear la carpeta)
+- **cuit**: CUIT sin guiones
+- **clave_fiscal**: Clave fiscal para acceder al portal de AFIP
+
+## Versión anterior
+
+La versión anterior del proyecto (anterior a la separación en Windows/Linux) se encuentra en commits anteriores. Si desea acceder a ella, puede usar git para volver a esos commits.
 
 ## Instalación
 
@@ -40,22 +67,6 @@ source venv/bin/activate
 # Instalar dependencias
 pip install -r requirements.txt
 ```
-
-## Estructura del archivo de entrada
-
-El programa utiliza un archivo CSV (`clientes.csv`) con el siguiente formato:
-
-```
-nombre,cuit,clave_fiscal
-"Nombre Apellido","20123456789","contraseña"
-```
-
-Cada línea debe contener:
-- **nombre**: Nombre completo del contribuyente (se usará para crear la carpeta)
-- **cuit**: CUIT sin guiones
-- **clave_fiscal**: Clave fiscal para acceder al portal de AFIP
-
-Si no dispone del archivo, el programa creará automáticamente un archivo de ejemplo (`clientes_ejemplo.csv`) que puede editar con sus datos.
 
 ## Uso
 

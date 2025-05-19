@@ -27,6 +27,7 @@ env/
 ENV/
 env.bak/
 venv.bak/
+linux/
 
 # Log files
 *.log

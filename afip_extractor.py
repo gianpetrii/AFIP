@@ -1190,13 +1190,14 @@ Si el problema persiste, contacta con soporte.
             logger.error(traceback.format_exc())
             return False
     
-    def procesar_contribuyente(self, contribuyente, año):
+    def procesar_contribuyente(self, contribuyente, año, sobrescribir=False):
         """
         Procesa toda la información de un contribuyente con un timeout general.
         
         Args:
             contribuyente (dict): Diccionario con datos del contribuyente
             año (str): Año a procesar
+            sobrescribir (bool): Si es True, sobrescribe los archivos existentes
             
         Returns:
             bool: True si el procesamiento fue exitoso, False en caso contrario
@@ -1223,15 +1224,19 @@ Si el problema persiste, contacta con soporte.
         
         # Verificar si ya existe la carpeta del contribuyente
         if os.path.exists(path_contribuyente):
-            logger.info(f"Ya existe una carpeta para el contribuyente: {path_contribuyente}")
-            try:
-                # Eliminar la carpeta existente para este contribuyente específico
-                import shutil
-                shutil.rmtree(path_contribuyente)
-                logger.info(f"Carpeta anterior del contribuyente eliminada: {path_contribuyente}")
-            except Exception as e:
-                logger.error(f"Error al eliminar la carpeta anterior del contribuyente {nombre}: {e}")
-                # Continuar de todos modos
+            if sobrescribir:
+                logger.info(f"Sobrescribiendo carpeta existente para el contribuyente: {path_contribuyente}")
+                try:
+                    # Eliminar la carpeta existente para este contribuyente específico
+                    import shutil
+                    shutil.rmtree(path_contribuyente)
+                    logger.info(f"Carpeta anterior del contribuyente eliminada: {path_contribuyente}")
+                except Exception as e:
+                    logger.error(f"Error al eliminar la carpeta anterior del contribuyente {nombre}: {e}")
+                    # Continuar de todos modos
+            else:
+                logger.info(f"La carpeta para el contribuyente ya existe y no se sobrescribirá: {path_contribuyente}")
+                return {"exitoso": False, "tipo_error": "carpeta_existente", "mensaje_error": "La carpeta ya existe y no se sobrescribirá"}
         
         try:
             crear_estructura_carpetas(path_contribuyente)
@@ -1590,21 +1595,25 @@ Si el problema persiste, contacta con soporte.
         
         return True
     
-    def ejecutar(self, año=None, csv_file=None):
+    def ejecutar(self, año=None, csv_file=None, sobrescribir=False):
         """Función principal que inicia todo el proceso"""
         try:
-            # Mostrar banner e instrucciones
+            # Mostrar banner de bienvenida
             self.mostrar_banner()
+            
+            # Validar año
+            if not año:
+                año = str(datetime.now().year)
+            
+            if año not in self.años_disponibles:
+                logger_usuario.info(f"Error: El año {año} no está disponible. Años disponibles: {', '.join(self.años_disponibles)}")
+                print(f"\nError: El año {año} no está disponible.")
+                print(f"Años disponibles: {', '.join(self.años_disponibles)}")
+                return
             
             # Mensaje inicial para el usuario
             logger_usuario.info("=== INICIANDO EXTRACTOR DE INFORMACIÓN FISCAL DE AFIP ===")
             logger_usuario.info(f"Fecha y hora de inicio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-            
-            # Solicitar año a evaluar si no se proporcionó
-            if año is None:
-                año = self.solicitar_año()
-                
-            logger_usuario.info(f"Se procesará el año fiscal: {año}")
             
             # Verificar la carpeta de resultados del año específico
             if not self.verificar_carpeta_resultados(año):
@@ -1679,7 +1688,7 @@ Si el problema persiste, contacta con soporte.
                     logger_usuario.info(f"Procesando contribuyente {i}/{len(contribuyentes)}: {nombre}")
                     
                     # Procesar el contribuyente
-                    resultado = self.procesar_contribuyente(contribuyente, año)
+                    resultado = self.procesar_contribuyente(contribuyente, año, sobrescribir)
                     
                     # Guardar el resultado
                     if isinstance(resultado, dict):
@@ -2465,6 +2474,11 @@ Si el problema persiste, contacta con soporte.
         .pill-otro {{
             background-color: #34495e;
         }}
+        .error-vencida { background-color: #ffd700; }
+        .error-timeout { background-color: #ffa500; }
+        .error-sistema { background-color: #ff69b4; }
+        .error-carpeta { background-color: #87ceeb; }
+        .error { background-color: #ff6b6b; }
     </style>
 </head>
 <body>
@@ -2555,6 +2569,9 @@ Si el problema persiste, contacta con soporte.
                         elif tipo_error == "clave_vencida":
                             estado_clase = "error-vencida"
                             estado_texto = "Clave vencida"
+                        elif tipo_error == "carpeta_existente":
+                            estado_clase = "error-carpeta"
+                            estado_texto = "Carpeta existe"
                         elif tipo_error == "timeout" or tipo_error == "timeout_general":
                             estado_clase = "error-timeout"
                             estado_texto = "Timeout"
@@ -2624,6 +2641,7 @@ Si el problema persiste, contacta con soporte.
                 "cuit_invalido": [],
                 "clave_incorrecta": [],
                 "clave_vencida": [],
+                "carpeta_existente": [],
                 
                 # Otros errores (puede ser útil separarlos)
                 "timeout": [],
@@ -2703,19 +2721,24 @@ Si el problema persiste, contacta con soporte.
                     file.write("   - La clave fiscal del contribuyente ha vencido y debe ser cambiada.\n")
                     file.write("   - Ingrese manualmente a AFIP con este CUIT y cambie la clave fiscal.\n\n")
                 
+                if contribuyentes_por_tipo["carpeta_existente"]:
+                    file.write(f"4. CARPETA EXISTENTE ({len(contribuyentes_por_tipo['carpeta_existente'])} contribuyentes):\n")
+                    file.write("   - Ya existe una carpeta con los resultados para este contribuyente.\n")
+                    file.write("   - Active la opción 'Sobrescribir archivos existentes' para procesar estos contribuyentes.\n\n")
+                
                 if contribuyentes_por_tipo["timeout"]:
-                    file.write(f"4. TIMEOUT ({len(contribuyentes_por_tipo['timeout'])} contribuyentes):\n")
+                    file.write(f"5. TIMEOUT ({len(contribuyentes_por_tipo['timeout'])} contribuyentes):\n")
                     file.write("   - El procesamiento tomó demasiado tiempo y fue interrumpido.\n")
                     file.write("   - Intente ejecutar el proceso nuevamente cuando la conexión sea más estable.\n\n")
                 
                 if contribuyentes_por_tipo["nuestra_parte"] or contribuyentes_por_tipo["procesamiento"]:
                     suma = len(contribuyentes_por_tipo["nuestra_parte"]) + len(contribuyentes_por_tipo["procesamiento"])
-                    file.write(f"5. ERRORES DEL SISTEMA AFIP ({suma} contribuyentes):\n")
+                    file.write(f"6. ERRORES DEL SISTEMA AFIP ({suma} contribuyentes):\n")
                     file.write("   - Hubo problemas al acceder o procesar la información en el sistema de AFIP.\n")
                     file.write("   - Estos errores pueden ser temporales. Intente nuevamente más tarde.\n\n")
                 
                 if contribuyentes_por_tipo["otro"]:
-                    file.write(f"6. OTROS ERRORES ({len(contribuyentes_por_tipo['otro'])} contribuyentes):\n")
+                    file.write(f"7. OTROS ERRORES ({len(contribuyentes_por_tipo['otro'])} contribuyentes):\n")
                     file.write("   - Errores no clasificados específicamente.\n")
                     file.write("   - Consulte el informe HTML para más detalles sobre cada error.\n\n")
                     
